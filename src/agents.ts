@@ -9,6 +9,8 @@ import type { Yaml } from './yaml.ts'
 
 export type Screen = 'waits' | 'working' | 'ready' | 'unknown'
 export type Badge = { glyph: string; tone: Tone }
+export const HARNESSES = ['claude', 'codex', 'copilot', 'jishubuddy'] as const
+export type Harness = typeof HARNESSES[number]
 
 /** Badges occupy exactly one cell: exclude controls, combining, wide and emoji glyphs. */
 export const validBadgeGlyph = (glyph: string): boolean => {
@@ -22,7 +24,7 @@ export const validBadgeGlyph = (glyph: string): boolean => {
 }
 
 export type Agent = {
-  usage?: 'claude' | 'codex'
+  usage?: Harness
   badge?: Badge
   command: string
   model: string[]
@@ -30,6 +32,7 @@ export type Agent = {
   /** Each group is one setting, satisfied by any flag in that group. */
   permission: string[][]
   prompt: 'last-arg'
+  promptArgs?: string[]
   screen: Record<Exclude<Screen, 'unknown'>, string[]>
   paste: 'bracketed'
 }
@@ -70,6 +73,37 @@ export const AGENTS: Record<string, Agent> = Object.assign(Object.create(null) a
     },
     paste: 'bracketed',
   },
+  copilot: {
+    usage: 'copilot',
+    badge: { glyph: 'C', tone: 'cyan' },
+    command: 'copilot',
+    model: ['--model', '{model}'],
+    effort: ['--reasoning-effort', '{effort}'],
+    permission: [['--allow-tool', '--deny-tool', '--assisted-approval', '--allow-all-tools', '--allow-all', '--yolo']],
+    prompt: 'last-arg',
+    promptArgs: ['-i'],
+    screen: {
+      waits: ['Do you trust', 'Trust this folder', 'Allow this', 'No, and tell Copilot', 'Yes, and'],
+      working: ['Esc to (cancel|interrupt)', 'esc to (cancel|interrupt)'],
+      ready: [],
+    },
+    paste: 'bracketed',
+  },
+  jishubuddy: {
+    usage: 'jishubuddy',
+    badge: { glyph: 'J', tone: 'coral' },
+    command: 'jishubuddy',
+    model: ['--model', '{model}'],
+    effort: ['--thinking-level', '{effort}'],
+    permission: [['--approval', '--yolo']],
+    prompt: 'last-arg',
+    screen: {
+      waits: ['^JishuBuddy needs your answer:'],
+      working: ['^JishuBuddy is working'],
+      ready: ['^jishubuddy>\\s*$'],
+    },
+    paste: 'bracketed',
+  },
 } satisfies Record<string, Agent>)
 
 export const badgeOf = (name: string, agent: Agent | undefined = AGENTS[name]): Badge =>
@@ -102,6 +136,7 @@ export const argvOf = (agent: Agent, role: Pick<Role, 'model' | 'effort' | 'flag
   ...extra,
   ...role.flags,
   ...writable.flatMap(path => ['--add-dir', path]),
+  ...(agent.promptArgs ?? []),
   prompt,
 ]
 
@@ -117,7 +152,7 @@ export const screenOf = (agent: Agent, captured: string): Screen => {
 
 type Map = { [key: string]: Yaml }
 const isMap = (value: Yaml | undefined): value is Map => typeof value === 'object' && value !== null && !Array.isArray(value)
-const KEYS = ['command', 'model', 'effort', 'permission', 'prompt', 'screen', 'paste', 'badge', 'usage']
+const KEYS = ['command', 'model', 'effort', 'permission', 'prompt', 'promptArgs', 'screen', 'paste', 'badge', 'usage']
 const STATES = ['waits', 'working', 'ready'] as const
 
 const lineOf = (source: string, field: string): number => {
@@ -159,8 +194,9 @@ const readAgent = (source: string): Agent => {
   })
   if (data.prompt !== 'last-arg') return fail('prompt', 'must be last-arg')
   if (data.paste !== 'bracketed') return fail('paste', 'must be bracketed')
-  if (data.usage !== undefined && data.usage !== 'claude' && data.usage !== 'codex') return fail('usage', 'must be claude or codex')
+  if (data.usage !== undefined && !HARNESSES.some(name => name === data.usage)) return fail('usage', `must be ${HARNESSES.join(', ')}`)
   const usage = data.usage as Agent['usage']
+  const promptArgs = data.promptArgs === undefined ? undefined : strings(data.promptArgs, 'promptArgs')
   if (!isMap(data.screen)) return fail('screen', 'must be a mapping')
   const screen: Agent['screen'] = { waits: [], working: [], ready: [] }
   for (const key of Object.keys(data.screen)) if (!STATES.some(state => state === key)) fail(`screen.${key}`, 'is not a screen state')
@@ -184,7 +220,7 @@ const readAgent = (source: string): Agent => {
     badge = { glyph: data.badge.glyph, tone: data.badge.tone as Tone }
   }
 
-  return { command: data.command, model, effort, permission, prompt: data.prompt, screen, paste: data.paste, ...(badge && { badge }), ...(usage === undefined ? {} : { usage }) }
+  return { command: data.command, model, effort, permission, prompt: data.prompt, screen, paste: data.paste, ...(promptArgs === undefined ? {} : { promptArgs }), ...(badge && { badge }), ...(usage === undefined ? {} : { usage }) }
 }
 
 /** Files replace an adapter in full: built-ins, then home, then repository. Problems must be resolved before use. */

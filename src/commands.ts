@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 
 import { check } from './check.ts'
+import { AGENTS, HARNESSES } from './agents.ts'
+import { launchAgent } from './harness.ts'
 import { langOf, WRITE_CHINESE } from './i18n.ts'
 import { clean, mux, NAME, Refusal, repository, runtime, Usage, workflowStages } from './command-context.ts'
 import type { Mission, Reply, Runtime } from './command-context.ts'
@@ -87,7 +89,7 @@ const wait = async (r: Runtime, m: Mission, target: { role?: string; gate?: stri
       if (target.ready) {
         const role = m.plan.roles.find(role => role.name === target.role)
         const agent = m.agents[opened.agent ?? role?.agent ?? '']
-        if (agent === undefined || agent.command !== opened.argv[0]) throw new Refusal(`role ${target.role}: its launched adapter cannot be resolved`)
+        if (agent === undefined || agent.command !== (opened.command ?? opened.argv[0])) throw new Refusal(`role ${target.role}: its launched adapter cannot be resolved`)
         const screen = turnOf(r, agent, opened, pane.screen)
         if (screen === 'ready') return { code: 0, out: `${target.role}: ready\n` }
         if (screen === 'waits') return { code: 1, out: `${target.role}: waits on you\n${waitsOnOf(agent, pane.screen) ?? ''}\n` }
@@ -173,8 +175,14 @@ const up = (r: Runtime, want: string, orch: string): Reply => {
   let opened
   let panel
   try {
-    opened = createPane(r, repo, 'mission', worktree, [orch])
+    const agent = AGENTS[orch]
+    if (agent === undefined) throw new Refusal(`unknown orchestrator: ${orch}`)
+    const launch = launchAgent(r, agent, [orch, ...(orch === 'jishubuddy' ? ['--approval', 'ask'] : [])], worktree)
+    opened = createPane(r, repo, 'mission', worktree, launch.argv)
     markOrchestrator(r, repo, opened.pane, want)
+    if (launch.activity !== undefined && (orch === 'copilot' || orch === 'jishubuddy')) {
+      append(logPath(repo.common, want), 'cli', { ev: 'orchestrator', harness: orch, session: launch.session, activity: launch.activity, mux: 'tmux', pane: opened.pane })
+    }
     panel = createPanel(r, repo, want, opened.pane, opened, 50, true)
     append(logPath(repo.common, want), 'cli', { ev: 'up', session: opened.session, window: opened.window, pane: opened.pane, panel: panel.pane })
   } catch (error) {
@@ -222,9 +230,9 @@ export const execute = async (command: string, args: string[], overrides: Partia
       return missionNew(r, id(pos[1], 'mission'), values.base ?? '')
     }
     if (command === 'up') {
-      count(pos, 0, 0, 'up -m <mission> [--orch claude|codex]')
-      const orch = values.orch ?? (available(r, 'claude') ? 'claude' : available(r, 'codex') ? 'codex' : 'claude')
-      if (!['claude', 'codex'].includes(orch)) throw new Usage('--orch must be claude or codex')
+      count(pos, 0, 0, `up -m <mission> [--orch ${HARNESSES.join('|')}]`)
+      const orch = values.orch ?? HARNESSES.find(name => available(r, name)) ?? 'claude'
+      if (!HARNESSES.some(name => name === orch)) throw new Usage(`--orch must be ${HARNESSES.join(', ')}`)
       return up(r, want, orch)
     }
     if (command === 'check') {

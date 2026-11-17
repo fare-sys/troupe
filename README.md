@@ -50,7 +50,7 @@ A task from plan to review and cleanup, in 68 seconds.
 
 ## Quick start
 
-You need **macOS, Linux or WSL2**, **tmux**, **Node.js 20+**, **git**, and **Claude Code and/or Codex**, installed and signed in.
+You need **macOS, Linux or WSL2**, **tmux**, **Node.js 20+**, **git**, and at least one supported agent installed and signed in: **Claude Code, Codex, GitHub Copilot CLI or JishuBuddy**. JishuBuddy itself requires Node.js 22+.
 
 Install:
 
@@ -73,6 +73,20 @@ and a dark theme that follows the system setting.
 The agent writes the plan and opens the panel beside it. Read the plan, press **`a`** to approve or **`c`** to request changes, and the team starts after approval.
 
 You can also run `troupe up -m <mission>` in your target repository to start the orchestrator and panel together.
+
+For Copilot or JishuBuddy, use the instrumented launcher so completion notices
+are delivered only after a real turn ends:
+
+```sh
+troupe up -m my-change --orch copilot
+# Or, for a different mission:
+troupe up -m another-change --orch jishubuddy
+```
+
+Both can also be execution or review roles. Copilot keeps its native terminal
+interface; JishuBuddy runs in a troupe-owned interactive terminal over its
+persistent RPC interface, with streaming output and human approval dialogs.
+See [agent configuration](docs/guide.md#copilot-and-jishubuddy).
 
 ## From one task to a finished change
 

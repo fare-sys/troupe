@@ -12,6 +12,7 @@ export const ACTIVITY_FILE = '.troupe/activity.json'
  * A plain deny or an interrupt fires no hook; the transcript's interrupt row ends that wait (see claudeActivity).
  */
 export const ACTIVITY_EVENTS = ['UserPromptSubmit', 'PermissionRequest', 'PostToolBatch', 'Stop', 'Notification'] as const
+export const COPILOT_EVENTS = ['sessionStart', 'userPromptSubmitted', 'preToolUse', 'postToolUse', 'postToolUseFailure', 'permissionRequest', 'agentStop'] as const
 /** A turn as the agent reports it. Busy covers working and waiting on an approval; the screen tells those two apart. */
 export type Turn = 'busy' | 'ready'
 /** A Claude role reports its waits too: its permission dialog (approvals, questions) holds the turn. */
@@ -50,6 +51,38 @@ const read = (file: string): Saved | undefined => {
   } catch {
     return undefined
   }
+}
+
+/** Read an instrumented session's state, rejecting stale launches and mismatched sessions. */
+export const reportedActivity = (file: string, since?: string, session?: string): Saved | undefined => {
+  const saved = read(file)
+  if (saved === undefined || !Number.isFinite(Date.parse(saved.at)) ||
+    (since !== undefined && (!Number.isFinite(Date.parse(since)) || Date.parse(saved.at) < Date.parse(since))) ||
+    (session !== undefined && saved.session !== session)) return undefined
+
+  return saved
+}
+
+/** Atomically publish a live integration event; failures must reach the integration's caller. */
+export const recordTurn = (file: string, turn: ClaudeTurn, session: string, event: string, now = new Date()): void => {
+  const before = read(file)
+  const answers = before?.session === session ? [...before.answers] : []
+  if (before?.session === session && before.turn === 'waits' && turn !== 'waits') {
+    answers.push({ at: now.toISOString(), then: turn === 'busy' ? 'working' : 'stopped' })
+  }
+  const temp = `${file}.${process.pid}.tmp`
+  writeFileSync(temp, `${JSON.stringify({ turn, event, session, at: now.toISOString(), answers: answers.slice(-ANSWERS) })}\n`)
+  renameSync(temp, file)
+}
+
+/** Copilot's native hook payload, with the event supplied by its per-session plugin. */
+export const recordCopilotActivity = (input: string, file: string, event: string): void => {
+  if (!COPILOT_EVENTS.some(name => name === event)) throw new Error(`Unsupported Copilot hook: ${event}`)
+  const payload: unknown = JSON.parse(input)
+  if (!object(payload) || typeof payload.sessionId !== 'string' || payload.sessionId === '') throw new Error('Copilot hook has no sessionId')
+  const asksPerson = event === 'permissionRequest' || (event === 'preToolUse' && payload.toolName === 'ask_user')
+  const turn = event === 'agentStop' ? 'ready' : asksPerson ? 'waits' : 'busy'
+  recordTurn(file, turn, payload.sessionId, event)
 }
 
 /** A recorded wait that a deny or an interrupt ended: no hook runs for those, but the transcript has the row. */

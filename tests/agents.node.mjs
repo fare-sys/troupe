@@ -71,9 +71,13 @@ test('argvOf pins the requested model, effort and raw role flags for each harnes
   const codex = { model: 'gpt-6.1-sol', effort: 'high', flags: ['-a', 'on-request', '-s', 'workspace-write'] }
   assert.deepEqual(argvOf(AGENTS.claude, claude, prompt), ['claude', '--model', 'haiku', '--effort', 'low', ...claude.flags, prompt])
   assert.deepEqual(argvOf(AGENTS.codex, codex, prompt), ['codex', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="high"', ...codex.flags, prompt])
+  assert.deepEqual(argvOf(AGENTS.copilot, { model: 'auto', effort: 'high', flags: ['--allow-tool=write'] }, prompt),
+    ['copilot', '--model', 'auto', '--reasoning-effort', 'high', '--allow-tool=write', '-i', prompt])
+  assert.deepEqual(argvOf(AGENTS.jishubuddy, { model: 'provider/model', effort: 'low', flags: ['--approval', 'ask'] }, prompt),
+    ['jishubuddy', '--model', 'provider/model', '--thinking-level', 'low', '--approval', 'ask', prompt])
   for (const agent of Object.values(AGENTS)) {
-    assert.deepEqual(argvOf(agent, { model: '', effort: '', flags: ['--policy=ask'] }, ''), [agent.command, '--policy=ask', ''])
-    assert.deepEqual(argvOf(agent, { model: '', effort: 'low', flags: [] }, prompt), [agent.command, ...agent.effort.map(arg => arg.replace('{effort}', 'low')), prompt])
+    assert.deepEqual(argvOf(agent, { model: '', effort: '', flags: ['--policy=ask'] }, ''), [agent.command, '--policy=ask', ...(agent.promptArgs ?? []), ''])
+    assert.deepEqual(argvOf(agent, { model: '', effort: 'low', flags: [] }, prompt), [agent.command, ...agent.effort.map(arg => arg.replace('{effort}', 'low')), ...(agent.promptArgs ?? []), prompt])
   }
 })
 
@@ -162,6 +166,16 @@ test('adapter directories that cannot be read are reported', t => {
   const { problems } = loadAgents(root, home)
   assert.equal(problems.length, 1)
   assert.ok(problems[0].startsWith(`${path}: line 1:`))
+})
+
+test('custom adapters can select new lifecycle reporters and flag-based prompts', t => {
+  const { root, home, write, repo } = temporary(t)
+  write(repo('custom'), `${adapter('custom')}usage: copilot\npromptArgs: [-i]\n`)
+  const loaded = loadAgents(root, home)
+  assert.deepEqual(loaded.problems, [])
+  assert.deepEqual(argvOf(loaded.agents.custom, { model: '', effort: '', flags: ['--policy=ask'] }, 'hello'), ['custom', '--policy=ask', '-i', 'hello'])
+  write(repo('custom'), `${adapter('custom')}promptArgs: [null]\n`)
+  assert.match(loadAgents(root, home).problems.join('\n'), /promptArgs must be a list of strings/)
 })
 
 test('troupe check uses loaded adapters and prints broken-file diagnostics', t => {

@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import type { Lang } from './i18n.ts'
+import type { Harness } from './agents.ts'
 
 // The mission's run log: <git-common-dir>/troupe/<mission>/log.jsonl, one
 // JSON object per line, appended by the CLI and the panel only. It holds what
@@ -14,13 +15,13 @@ export type Event =
   | { ev: 'gate-open'; gate: string; ask?: string; plan?: string }
   | { ev: 'gate-answer'; gate: string; answer: GateAnswer; text?: string; plan?: string }
   | { ev: 'stage'; stage: string }
-  | { ev: 'dispatch'; role: string; session: string; window: string; pane: string; worktree: string; branch: string; base: string; argv: string[]; owner?: string; agent?: string; socket?: string; server?: string }
+  | { ev: 'dispatch'; role: string; session: string; window: string; pane: string; worktree: string; branch: string; base: string; argv: string[]; command?: string; owner?: string; agent?: string; socket?: string; server?: string }
   | { ev: 'up'; session: string; window: string; pane: string; panel: string }
   | { ev: 'send'; role: string; text: string }
   | { ev: 'close'; role: string }
   | { ev: 'teardown'; role?: never }
   /** The agent session running the mission, and the pane to type to it (#43). */
-  | { ev: 'orchestrator'; harness: 'claude' | 'codex'; session: string; mux: 'tmux' | 'herdr'; pane: string }
+  | { ev: 'orchestrator'; harness: Harness; session: string; mux: 'tmux' | 'herdr'; pane: string; activity?: string }
   /** A line troupe typed into the orchestrator; its key says what it reported. */
   | { ev: 'notice'; key: string; text: string }
   /** The person switched the panel's language; the orchestrator is told to write in it. */
@@ -32,13 +33,14 @@ export type Logged = Event & { at: string; by: By }
 /** The plan gate: the one gate the core owns, because dispatch depends on it. */
 export const PLAN_GATE = 'plan'
 
-export type Orchestrator = { harness: 'claude' | 'codex'; session: string; mux: 'tmux' | 'herdr'; pane: string; at: string }
+export type Orchestrator = Omit<Extract<Event, { ev: 'orchestrator' }>, 'ev'> & { at: string }
 
 /** The mission's orchestrator as last recorded (#43). */
 export const orchestratorOf = (events: Logged[]): Orchestrator | undefined => {
   const last = events.filter(e => e.ev === 'orchestrator').at(-1)
 
-  return last?.ev === 'orchestrator' ? { harness: last.harness, session: last.session, mux: last.mux, pane: last.pane, at: last.at } : undefined
+  return last?.ev === 'orchestrator' ? { harness: last.harness, session: last.session, mux: last.mux, pane: last.pane, at: last.at,
+    ...(last.activity === undefined ? {} : { activity: last.activity }) } : undefined
 }
 
 export const logPath = (commonDir: string, mission: string): string => join(commonDir, 'troupe', mission, 'log.jsonl')

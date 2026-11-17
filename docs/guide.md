@@ -66,7 +66,7 @@ on usage errors.
 | `setup [--remove]` | install the workflow skill for each harness found |
 | `mission new <name> [--base <ref>]` | create the mission's worktree on `mission/<name>` with the plan template, bind this pane to it and open its panel |
 | `open [--planning]` | show this pane's mission's panel beside it (one per mission); without a mission it refuses and lists the open ones, except with `--planning`, which shows a panel waiting for `mission new`; `open -m <name>` from an unbound pane makes it that mission's orchestrator, only once the previous orchestrator pane is gone or dead |
-| `up -m <name> [--orch claude\|codex]` | `mission new`, then open the orchestrator in the mission worktree and the panel |
+| `up -m <name> [--orch claude\|codex\|copilot\|jishubuddy]` | `mission new`, then open the orchestrator in the mission worktree and the panel |
 | `panel` | the live panel (`up` runs it; `--once --plain` prints one frame) |
 | `check` | check the plan and the user adapters |
 | `approve` | approve the plan, from a terminal only |
@@ -118,12 +118,17 @@ and what troupe reads (headings, YAML, `status:`, CLI output) stays English.
 
 ## Agents
 
-Built in: `claude` and `codex`. An adapter says how to start the agent with
+Built in: `claude`, `codex`, `copilot` and `jishubuddy`. An adapter says how to start the agent with
 a first prompt, how to pass model and effort, which flags pin its
 permission, and which screen patterns mean waits on you, working and ready.
 Add one as `~/.config/troupe/agents/<name>.yaml` or
 `<repo>/.troupe/agents/<name>.yaml` (the repository's wins); `src/agents.ts`
 holds the built-ins in the same shape.
+
+Adapters may set `promptArgs: [-i]` to place a prompt flag immediately
+before the final prompt argument, as Copilot requires. Omitting it preserves
+the positional-prompt behavior. `usage` selects the built-in lifecycle
+integration; it is not an arbitrary transcript format.
 
 A built-in role's turn comes from its agent, not its screen. Claude roles
 start with lifecycle hooks in `--settings` (`UserPromptSubmit`,
@@ -166,6 +171,90 @@ its reflogs. This allows commits without granting the whole common Git
 directory or main-branch refs. Mission refs and objects are shared, so this
 is not isolation between roles in the same mission. The approval/sandbox
 flags remain the ones in the plan. See the [Codex CLI reference](https://developers.openai.com/codex/cli/reference).
+
+### Copilot and JishuBuddy
+
+Start either orchestrator with `troupe up --orch copilot -m <mission>` or
+`troupe up --orch jishubuddy -m <mission>`. The launcher records the exact
+session and its activity file in the mission log. Merely opening a panel
+beside an existing, uninstrumented session does not install these lifecycle
+integrations or take over that session.
+
+Both names are available in plans, including builder and reviewer roles:
+
+```yaml
+roles:
+  build:
+    agent: copilot
+    model: auto
+    effort: high
+    flags: [--allow-tool=write]
+    touches: [src/]
+  review:
+    agent: jishubuddy
+    # Optional: use an ID available in your JishuBuddy model catalog.
+    # model: provider/model-id
+    effort: low
+    flags: [--approval, ask]
+    touches: []
+    reviews: [build]
+```
+
+Include each role's normal `## Role: <name>` instructions. Copilot receives
+`--model`, `--reasoning-effort` and `-i <brief prompt>`. Its flags must
+explicitly declare a tool allow/deny rule or approval policy; the example
+allows writes but does not automatically grant shell commands. Existing
+account and local permission policies still apply.
+
+Copilot's per-session `--plugin-dir` plugin lives under
+`<worktree>/.troupe/copilot-plugin`. Native prompt, tool, permission and
+stop hooks publish `.troupe/activity.json`. No shared Copilot configuration
+is rewritten. Disabling hooks, including through organization policy,
+prevents reliable readiness: inspect the agent's terminal and re-enable
+the integration rather than bypassing `troupe send`.
+
+JishuBuddy's public TUI does not accept a starting prompt or per-run model
+options. Instead, troupe starts one persistent `jishubuddy rpc` process per
+pane. The bridge sets the requested model and thinking level before sending
+the brief and keeps the same session for follow-up work. An unavailable or
+ambiguous model fails visibly; use `provider/model-id` to disambiguate.
+Thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh` and
+`max`, subject to the selected model's support.
+
+`--approval ask` is a **troupe bridge option**, not a native JishuBuddy
+flag. It preserves normal JishuBuddy approval behavior without passing
+`--yolo`. Only an explicitly approved `flags: [--yolo]` selects bypass mode;
+troupe never adds it automatically. Selection dialogs require the displayed
+option number; confirmations default to **no**. Replies remain in the
+agent's pane, not in `troupe send`. The bridge supports streamed text,
+tool activity and select/confirm/input/editor dialogs; editor replies are
+one line unless pasted as a bracketed multi-line message. It is not the
+original JishuBuddy TUI and does not provide its slash-command menus.
+
+Bridge commands: `/abort` interrupts work, `/cancel` cancels a dialog,
+`/exit` closes the session, and `/help` shows these commands. Protocol
+errors, startup failures and RPC timeouts are printed to stderr and exit
+nonzero. A request response acknowledges acceptance, not completion:
+`agent_end` is not considered idle, because a retry may follow.
+Readiness requires `agent_settled` and an idle state with no queued prompts
+or compaction. These events, and Copilot's stop hook, drive both role
+readiness and orchestrator notifications; answered waits use the existing
+once-only notice mechanism. Context/token counters are not yet provided
+for these two agents.
+
+`troupe setup` installs the Copilot skill under
+`$COPILOT_HOME/skills/troupe-mission` (default `~/.copilot/skills`) and the
+JishuBuddy skill under `~/.agents/skills/troupe-mission`, shared with Codex.
+The shared target is installed or removed only once; unmarked user files
+are never overwritten. Run `troupe setup` again after updating your build.
+If an agent cannot start, run it directly to check login and provider
+configuration, then inspect `troupe status --json` and its pane. An
+unreported turn stays unknown rather than being treated as ready.
+
+To roll back locally, close affected mission panes with `troupe close
+--all -m <mission>` and use `--orch claude` or `--orch codex` for new
+missions. Branches and worktrees remain available; shared agent settings
+are unchanged.
 
 ## Where things live
 

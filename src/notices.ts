@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
-import { claudeActivity } from './activity.ts'
+import { ACTIVITY_FILE, claudeActivity, reportedActivity } from './activity.ts'
+import type { Harness } from './agents.ts'
 import { mux } from './command-context.ts'
 import { switchedTo } from './i18n.ts'
 import type { Mission, Repository, Runtime } from './command-context.ts'
@@ -20,7 +21,7 @@ import type { TurnAt } from './usage.ts'
 // person answers a role's wait in its window, so the orchestrator never polls. Who the orchestrator is, where it runs and what was already said live in the run log;
 // whether it can take a line comes from its own transcript (Claude) or session log (Codex), never its screen.
 
-export type Harness = 'claude' | 'codex'
+export type { Harness } from './agents.ts'
 export type Mux = 'tmux' | 'herdr'
 type Notice = { key: string; text: string }
 
@@ -66,11 +67,13 @@ export const callerTarget = (r: Runtime): { mux: Mux; pane: string } | undefined
 export const recordOrchestrator = (r: Runtime, repo: Repository, name: string): void => {
   try {
     if (name === '' || !relative(join(repo.root, '.troupe/worktrees'), r.cwd).startsWith('..')) return
+    const log = logPath(repo.common, name)
+    const last = orchestratorOf(readLog(log).events)
+    // Managed sessions are registered at launch; inherited outer-agent variables must not replace them.
+    if (last?.activity !== undefined && callerTarget(r)?.pane === last.pane) return
     const session = agentSession(r)
     const target = session === undefined ? undefined : callerTarget(r)
     if (session === undefined || target === undefined || session.session === '') return
-    const log = logPath(repo.common, name)
-    const last = orchestratorOf(readLog(log).events)
     if (last?.harness === session.harness && last.session === session.session && last.mux === target.mux && last.pane === target.pane) return
     append(log, 'cli', { ev: 'orchestrator', ...session, ...target })
   } catch { /* A command never fails over its notices. */ }
@@ -105,7 +108,8 @@ export const pendingNotices = (r: Runtime, m: Mission, events: Logged[], since: 
     const path = join(opened.worktree, RESULT_FILE)
     const written = writtenAt(path)
     const finished = result !== undefined && result.status !== '' && written !== undefined
-    const activity = agent?.usage === 'claude' ? claudeActivity(opened.worktree, opened.at, r.home) : undefined
+    const activity = agent?.usage === 'claude' ? claudeActivity(opened.worktree, opened.at, r.home)
+      : agent?.usage === 'copilot' || agent?.usage === 'jishubuddy' ? reportedActivity(join(opened.worktree, ACTIVITY_FILE), opened.at) : undefined
     // Each wait the person answered in the role's window, oldest first, until told; a finish told or work sent
     // since, or a result written since, makes it old news.
     const superseded = events.filter(e => e.ev === 'send' && e.role === name || e.ev === 'notice' && e.key.startsWith(`role:${name}:`)).at(-1)?.at
@@ -125,8 +129,13 @@ export const pendingNotices = (r: Runtime, m: Mission, events: Logged[], since: 
   return notices.map(one => ({ ...one, text: one.text.replace(/\s+/g, ' ').trim() }))
 }
 
-const turnOfOrchestrator = (r: Runtime, o: Orchestrator): TurnAt | undefined =>
-  o.harness === 'claude' ? claudeSessionTurn(o.session, r.home) : codexThreadTurn(o.session, r.home)
+const turnOfOrchestrator = (r: Runtime, o: Orchestrator): TurnAt | undefined => {
+  if (o.harness === 'claude') return claudeSessionTurn(o.session, r.home)
+  if (o.harness === 'codex') return codexThreadTurn(o.session, r.home)
+  const activity = o.activity === undefined ? undefined : reportedActivity(o.activity, o.at, o.session)
+
+  return activity?.turn === 'ready' || activity?.turn === 'busy' ? { turn: activity.turn, at: Date.parse(activity.at) } : undefined
+}
 
 const typeInto = (r: Runtime, o: Orchestrator, text: string): boolean => {
   if (o.mux === 'herdr') {

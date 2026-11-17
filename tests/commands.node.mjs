@@ -14,6 +14,7 @@ import { INSTALL_MARKER } from '../dist/setup.js'
 import { panelEffect } from '../dist/panel-actions.js'
 import { readPanel } from '../dist/panel-model.js'
 import { gateTarget } from '../dist/panel-input.js'
+import { recordTurn } from '../dist/activity.js'
 
 const adapter = `command: fake
 model: [--model, '{model}']
@@ -306,7 +307,9 @@ test('setup updates marked copies and removes only its own skill directories', a
   assert.equal((await w.call('setup')).code, 0)
   const claude = join(w.home, '.claude/skills/troupe-mission')
   const codex = join(w.home, '.agents/skills/troupe-mission')
+  const copilot = join(w.home, '.copilot/skills/troupe-mission')
   assert.ok(existsSync(join(claude, INSTALL_MARKER)))
+  assert.ok(existsSync(join(copilot, INSTALL_MARKER)))
   w.write(join(w.pkg, 'skills/troupe-mission/SKILL.md'), 'Updated workflow')
   assert.equal((await w.call('setup')).code, 0)
   assert.equal(readFileSync(join(codex, 'SKILL.md'), 'utf8'), 'Updated workflow')
@@ -314,7 +317,57 @@ test('setup updates marked copies and removes only its own skill directories', a
   assert.equal((await w.call('setup', '--remove')).code, 1)
   assert.ok(existsSync(claude))
   assert.ok(!existsSync(codex))
+  assert.ok(!existsSync(copilot))
   assert.equal((await w.call('setup')).code, 1)
+})
+
+test('Copilot and JishuBuddy roles launch with instrumentation and accept follow-up work only after a real turn ends', async t => {
+  for (const harness of ['copilot', 'jishubuddy']) {
+    const w = world(t)
+    const flags = harness === 'copilot' ? '[--allow-tool=write]' : '[--approval, ask]'
+    w.write(join(w.root, 'docs/missions/m1/plan.md'), plan().replaceAll('agent: fake', `agent: ${harness}`).replaceAll('[--policy, ask]', flags))
+    assert.equal((await w.approve()).code, 0)
+    const dispatched = await w.call('dispatch', 'api')
+    assert.equal(dispatched.code, 0, dispatched.out)
+    const opened = w.events().find(event => event.ev === 'dispatch')
+    assert.equal(opened.command, harness)
+    if (harness === 'copilot') {
+      assert.equal(opened.argv[0], 'copilot')
+      assert.equal(opened.argv.at(-2), '-i')
+      const plugin = opened.argv[opened.argv.indexOf('--plugin-dir') + 1]
+      assert.ok(JSON.parse(readFileSync(join(plugin, 'hooks/hooks.json'), 'utf8')).hooks.agentStop)
+    } else {
+      assert.equal(opened.argv[0], process.execPath)
+      assert.ok(opened.argv.includes('jishubuddy'))
+      assert.ok(opened.argv.includes('--approval'))
+      assert.ok(!opened.argv.includes('--yolo'))
+    }
+    w.panes.get(opened.pane).screen = 'jishubuddy> '
+    assert.match((await w.call('send', 'api', 'next')).out, /unknown/)
+    const file = join(opened.worktree, '.troupe/activity.json')
+    recordTurn(file, 'waits', 'role-session', 'permission')
+    assert.match((await w.call('wait', '--role', 'api', '--ready', '--timeout', '0')).out, /waits on you/)
+    recordTurn(file, 'ready', 'role-session', 'finished')
+    assert.equal((await w.call('wait', '--role', 'api', '--ready', '--timeout', '0')).code, 0)
+    assert.equal((await w.call('send', 'api', 'next')).code, 0)
+  }
+})
+
+test('new orchestrators record their instrumented session and preserve human approval defaults', async t => {
+  for (const harness of ['copilot', 'jishubuddy']) {
+    const w = world(t)
+    const result = await w.call('up', '-m', 'new-agent', '--orch', harness)
+    assert.equal(result.code, 0, result.out)
+    const events = readLog(join(w.root, '.git/troupe/new-agent/log.jsonl')).events
+    const orchestrator = events.find(event => event.ev === 'orchestrator')
+    assert.equal(orchestrator.harness, harness)
+    assert.match(orchestrator.session, /^[a-f0-9-]{36}$/)
+    assert.equal(orchestrator.activity, join(w.root, '.troupe/missions/new-agent/.troupe/activity.json'))
+    const launch = w.calls.find(call => call.args.includes('new-session')).args.at(-1)
+    assert.ok(!launch.includes('--yolo'))
+    if (harness === 'jishubuddy') assert.ok(launch.includes("'--approval' 'ask'"))
+    else assert.ok(launch.includes("'--plugin-dir'"))
+  }
 })
 
 test('up starts a mission: its worktree, plain orchestrator there and half-width panel, then attaches outside tmux', async t => {
@@ -704,12 +757,15 @@ test('up chooses the available orchestrator, preferring claude, and an explicit 
     [['claude'], [], 'claude'],
     [['claude', 'codex'], [], 'claude'],
     [['claude', 'codex'], ['--orch', 'codex'], 'codex'],
+    [['copilot'], [], 'copilot'],
+    [['jishubuddy'], [], 'jishubuddy'],
   ]) {
     const w = world(t)
-    const result = await execute('up', ['-m', 'm2', ...args], { ...w.r, run: (command, argv, options) => command === 'which' && ['claude', 'codex'].includes(argv[0]) && !found.includes(argv[0])
+    const result = await execute('up', ['-m', 'm2', ...args], { ...w.r, run: (command, argv, options) => command === 'which' && ['claude', 'codex', 'copilot', 'jishubuddy'].includes(argv[0]) && !found.includes(argv[0])
       ? { code: 1, out: '', err: '' } : w.r.run(command, argv, options) })
     assert.equal(result.code, 0, result.out)
-    assert.ok(w.calls.some(c => c.args.includes('new-session') && c.args.at(-1) === shellOf([expected])))
+    assert.ok(w.calls.some(c => c.args.includes('new-session') && (['claude', 'codex'].includes(expected)
+      ? c.args.at(-1) === shellOf([expected]) : c.args.at(-1).includes(`'${expected}'`))))
     assert.ok(result.out.includes(`${expected} orchestrator`))
   }
 })

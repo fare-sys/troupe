@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 
-import { ACTIVITY_EVENTS, claudeActivity, claudeTurn, recordActivity } from '../dist/activity.js'
+import { ACTIVITY_EVENTS, claudeActivity, claudeTurn, recordActivity, recordCopilotActivity, recordTurn, reportedActivity } from '../dist/activity.js'
 import { AGENTS } from '../dist/agents.js'
 import { roleSettings, turnOf } from '../dist/role-commands.js'
 import { shellOf } from '../dist/run.js'
@@ -20,6 +20,34 @@ const hook = (event, extra = {}) => JSON.stringify({ hook_event_name: event, ses
 const READY = '❯ '
 const APPROVAL = 'Do you want to proceed?\n❯ 1. Yes'
 
+test('new integrations report real lifecycle state, retain answers and reject stale session state', t => {
+  const { home, write } = temporary(t)
+  const file = write(join(home, '.troupe/activity.json'), '')
+  const payload = JSON.stringify({ sessionId: 'copilot-session' })
+  const turn = () => turnOf({ home }, AGENTS.copilot, { worktree: home }, '')
+  recordCopilotActivity(payload, file, 'userPromptSubmitted')
+  assert.equal(turn(), 'working')
+  recordCopilotActivity(payload, file, 'permissionRequest')
+  assert.equal(turn(), 'waits')
+  recordCopilotActivity(payload, file, 'postToolUse')
+  assert.equal(turn(), 'working')
+  assert.equal(reportedActivity(file).answers[0].then, 'working')
+  recordCopilotActivity(payload, file, 'agentStop')
+  assert.equal(turn(), 'ready')
+  recordCopilotActivity(JSON.stringify({ sessionId: 'copilot-session', toolName: 'ask_user' }), file, 'preToolUse')
+  assert.equal(turn(), 'waits')
+  recordCopilotActivity(payload, file, 'postToolUse')
+  assert.equal(turn(), 'working')
+  assert.equal(reportedActivity(file, undefined, 'other-session'), undefined)
+  assert.equal(reportedActivity(file, 'invalid timestamp'), undefined)
+  assert.equal(reportedActivity(file, new Date(Date.now() + 60000).toISOString()), undefined)
+  assert.throws(() => recordCopilotActivity('{}', file, 'agentStop'), /sessionId/)
+  assert.throws(() => recordCopilotActivity(payload, file, 'invented'), /Unsupported/)
+  recordTurn(file, 'waits', 'bridge-session', 'extension_ui_request')
+  recordTurn(file, 'ready', 'bridge-session', 'agent_settled')
+  assert.equal(turnOf({ home }, AGENTS.jishubuddy, { worktree: home }, ''), 'ready')
+  assert.deepEqual(reportedActivity(file).answers.map(answer => answer.then), ['stopped'])
+})
 test('Claude hook events record the turn; anything else changes nothing', t => {
   const { home } = temporary(t)
   const file = join(home, 'activity.json')

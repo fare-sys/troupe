@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 
-import { recordActivity } from '../dist/activity.js'
+import { recordActivity, recordTurn } from '../dist/activity.js'
 import { AGENTS } from '../dist/agents.js'
 import { langOf, saveLang } from '../dist/i18n.js'
 import { append, readLog } from '../dist/log.js'
@@ -37,6 +37,43 @@ test('the orchestrator is the agent session this command really runs under, not 
   assert.deepEqual(agentSession({ pid: 100, env: { CODEX_THREAD_ID: 't1', CLAUDE_CODE_SESSION_ID: 's1', CLAUDE_PID: '70' }, run: psRun({ 80: 'codex', 70: 'claude' }) }), { harness: 'codex', session: 't1' })
   assert.deepEqual(callerTarget({ env: { TMUX: 'x', TMUX_PANE: '%7' }, run: () => ({ code: 0, out: '', err: '' }) }), { mux: 'tmux', pane: '%7' })
   assert.deepEqual(callerTarget({ pid: 100, env: { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p4' }, run: () => ({ code: 1, out: '', err: '' }) }), { mux: 'herdr', pane: 'w1:p4' })
+})
+
+test('new orchestrators receive notices only from their own live ready session, once per completed turn', t => {
+  for (const harness of ['copilot', 'jishubuddy']) {
+    const { home, write } = temporary(t)
+    const log = join(home, 'repo/.git/troupe/m1/log.jsonl')
+    const activity = write(join(home, 'mission/.troupe/activity.json'), '')
+    const typed = []
+    const r = { home, env: {}, run: (command, args) => {
+      if (command === 'herdr') { if (args[1] === 'run') typed.push(args[3]); return { code: 0, out: '', err: '' } }
+      return { code: 1, out: '', err: '' }
+    } }
+    const m = { name: 'm1', log, hash: 'h', agents: {} }
+    const start = new Date(Date.now() - 1000)
+    append(log, 'cli', { ev: 'orchestrator', harness, session: 'owned-session', activity, mux: 'herdr', pane: 'w1:p1' }, start)
+    append(log, 'panel', { ev: 'gate-answer', gate: 'mr-ok', answer: 'approve' })
+    recordTurn(activity, 'ready', 'stale-session', 'agent_settled')
+    deliverNotices(r, m)
+    assert.equal(typed.length, 0)
+    for (const state of ['busy', 'waits']) {
+      recordTurn(activity, state, 'owned-session', 'activity')
+      deliverNotices(r, m)
+      assert.equal(typed.length, 0)
+    }
+    recordTurn(activity, 'ready', 'owned-session', 'agent_settled')
+    deliverNotices(r, m)
+    assert.equal(typed.length, 1)
+    assert.match(typed[0], /^mr-ok approved/)
+    append(log, 'panel', { ev: 'gate-answer', gate: 'merged', answer: 'approve' })
+    deliverNotices(r, m)
+    assert.equal(typed.length, 1)
+    recordTurn(activity, 'ready', 'owned-session', 'agent_settled', new Date(Date.now() + 60000))
+    deliverNotices(r, m)
+    assert.equal(typed.length, 2)
+    deliverNotices(r, m)
+    assert.equal(typed.length, 2)
+  }
 })
 
 test('a Claude session turn comes from its transcript: prompts and tool results run it, turn_duration or an interrupt ends it', t => {

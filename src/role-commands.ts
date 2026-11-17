@@ -4,12 +4,13 @@ import { basename, dirname, join, resolve } from 'node:path'
 
 import { argvOf, optionOf, screenOf } from './agents.ts'
 import type { Agent, Screen } from './agents.ts'
-import { ACTIVITY_EVENTS, ACTIVITY_FILE, claudeTurn } from './activity.ts'
+import { ACTIVITY_EVENTS, ACTIVITY_FILE, claudeTurn, reportedActivity } from './activity.ts'
 import { clean, excludeTroupe, git, mux, Refusal, within, workflowStages } from './command-context.ts'
 import type { Mission, Reply, Runtime } from './command-context.ts'
 import { langOf, WRITE_CHINESE } from './i18n.ts'
 import type { Lang } from './i18n.ts'
 import { append, isApproved } from './log.ts'
+import { launchAgent } from './harness.ts'
 import type { Live } from './model.ts'
 import { boundTo, markedPanes, mission, missionTree, orchestratorsOf, unbind } from './missions.ts'
 import { createPane, ownedPane, rolesName, rolesWindow } from './panes.ts'
@@ -56,7 +57,8 @@ export const waitsOnOf = (agent: Agent, screen: string): string | undefined => {
  */
 export const turnOf = (r: Runtime, agent: Agent, opened: { worktree: string; at?: string }, screen: string): Screen => {
   const reported = agent.usage === 'claude' ? claudeTurn(opened.worktree, opened.at, r.home)
-    : agent.usage === 'codex' ? codexTurn(opened.worktree, opened.at, r.home) : undefined
+    : agent.usage === 'codex' ? codexTurn(opened.worktree, opened.at, r.home)
+      : agent.usage === 'copilot' || agent.usage === 'jishubuddy' ? reportedActivity(join(opened.worktree, ACTIVITY_FILE), opened.at)?.turn : undefined
   if (reported === 'ready' || reported === 'waits') return reported
   const seen = screenOf(agent, screen)
   if (reported === 'busy') return seen === 'waits' ? 'waits' : 'working'
@@ -85,7 +87,7 @@ export const liveOf = (r: Runtime, m: Mission, role: Role): Live & { problem?: s
   const lines = (pane?.screen ?? '').split(/\r?\n/)
   while (lines.at(-1)?.trim() === '') lines.pop()
   const waitsOn = pane === undefined || agent === undefined ? undefined : waitsOnOf(agent, pane.screen)
-  const tokens = opened?.worktree && agent?.usage ? tokensOf(agent.usage, opened.worktree, opened.at, r.home) : undefined
+  const tokens = opened?.worktree && (agent?.usage === 'claude' || agent?.usage === 'codex') ? tokensOf(agent.usage, opened.worktree, opened.at, r.home) : undefined
   // A reviewer's earlier results say when each done-when criterion first passed.
   const earlier = opened !== undefined && role.touches.length === 0 && role.reviews.length > 0 ? earlierResults(dirname(m.log), role.name) : []
 
@@ -195,10 +197,10 @@ export const dispatch = async (r: Runtime, initial: Mission, name: string): Prom
   const window = rolesWindow(r, m, m.name)
   const agent = m.agents[role.agent]
   if (agent === undefined) throw new Refusal(`unknown agent: ${role.agent}`)
-  const argv = argvOf(agent, role, `Read the brief in ${brief} and follow it.`, gitDirsOf(r, m, role, worktree), roleSettings(r, m, agent, worktree))
+  const { argv } = launchAgent(r, agent, argvOf(agent, role, `Read the brief in ${brief} and follow it.`, gitDirsOf(r, m, role, worktree), roleSettings(r, m, agent, worktree)), worktree)
   const opened = createPane(r, m, name, worktree, argv, window, undefined, rolesName(m.name))
   try {
-    append(m.log, 'cli', { ev: 'dispatch', role: name, ...opened, worktree, branch, base, argv, agent: role.agent })
+    append(m.log, 'cli', { ev: 'dispatch', role: name, ...opened, worktree, branch, base, argv, command: agent.command, agent: role.agent })
   } catch (error) {
     if (ownedPane(r, opened).alive) tmux(['kill-pane', '-t', opened.pane], r.run, r.env)
     throw error
@@ -214,7 +216,7 @@ export const send = async (r: Runtime, initial: Mission, name: string, text: str
   if (opened === undefined || opened.closed) throw new Refusal(`role ${name}: no open pane recorded by troupe`)
   const role = m.plan.roles.find(role => role.name === name)
   const agent = m.agents[opened.agent ?? role?.agent ?? '']
-  if (agent === undefined || agent.command !== opened.argv[0]) throw new Refusal(`role ${name}: its launched adapter cannot be resolved`)
+  if (agent === undefined || agent.command !== (opened.command ?? opened.argv[0])) throw new Refusal(`role ${name}: its launched adapter cannot be resolved`)
   const ready = () => {
     const pane = ownedPane(r, opened)
     if (!pane.alive || pane.dead) throw new Refusal(`role ${name}: pane is gone or its agent exited`)

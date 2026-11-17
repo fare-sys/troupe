@@ -1,6 +1,6 @@
 ---
 name: troupe-mission
-description: Run a multi-step software change as a troupe mission, with this session as the orchestrator. You write a plan with the person, they approve it in the troupe panel, and each role then works in a real tmux window of its own (Claude Code or Codex), in its own git worktree and branch, in parallel where the files allow; a reviewer role checks each branch as it lands and you merge, then open the MR after the person's yes. Use it whenever the person wants work split across several agents or windows, says "troupe", "mission", "run this as a mission", "split this into roles", "open the roles", "dispatch", "开几个 agent 并行做", or asks to plan, approve, build, review or land a mission under docs/missions/, in Claude Code or in Codex. Not for a change one session can just make, and not for changing troupe itself.
+description: Run a multi-step software change as a troupe mission, with this session as the orchestrator. You write a plan with the person, they approve it in the troupe panel, and each role then works in a real tmux window of its own (Claude Code, Codex, GitHub Copilot CLI or a JishuBuddy RPC terminal), in its own git worktree and branch, in parallel where the files allow; a reviewer role checks each branch as it lands and you merge, then open the MR after the person's yes. Use it whenever the person wants work split across several agents or windows, says "troupe", "mission", "run this as a mission", "split this into roles", "open the roles", "dispatch", "开几个 agent 并行做", or asks to plan, approve, build, review or land a mission under docs/missions/, in any supported agent. Not for a change one session can just make, and not for changing troupe itself.
 ---
 
 # Mission
@@ -69,11 +69,15 @@ tells you in a line.
   the sharing (split the file); only then order them with `depends_on`.
   Fewer, fuller roles beat many thin ones: each is a window the person
   watches.
-- **Each role says who runs it**: `agent` (`claude`, `codex`, or an adapter
+- **Each role says who runs it**: `agent` (`claude`, `codex`, `copilot`, `jishubuddy`, or an adapter
   in `.troupe/agents/`), `model`, `effort`, and `flags`, which must pin its
   permission (Claude Code: `--permission-mode acceptEdits`; Codex:
   `-a on-request -s workspace-write`). Propose; the person decides at the
   gate. Propose a bypass mode only when the person asks for one.
+  Copilot can use `flags: [--allow-tool=write]`; JishuBuddy uses the
+  troupe bridge's `flags: [--approval, ask]`, which does not enable YOLO.
+  Copilot model/effort map to `--model`/`--reasoning-effort`; JishuBuddy
+  model/effort select an available RPC model and thinking level.
   For Codex `workspace-write`, dispatch adds `--add-dir` for its Git index,
   shared objects and the mission's refs/reflogs. This permits commits, not
   writes to the main branch; roles still share the mission refs and objects.

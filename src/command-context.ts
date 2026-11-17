@@ -98,7 +98,8 @@ export const within = (root: string, ref: string): string => {
 export const workflowDirs = (r: Runtime, name: string): string[] => {
   if (!NAME.test(name)) throw new Refusal(`invalid workflow name: ${name}`)
 
-  return [join(r.home, '.claude/skills', name), join(r.home, '.agents/skills', name), join(r.packageRoot, 'skills', name)]
+  return [join(r.home, '.claude/skills', name), join(r.home, '.agents/skills', name),
+    join(r.env.COPILOT_HOME || join(r.home, '.copilot'), 'skills', name), join(r.packageRoot, 'skills', name)]
 }
 
 export const workflowStages = (r: Runtime, name: string) => {

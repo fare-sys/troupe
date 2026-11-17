@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { execute } from '../dist/commands.js'
 import { runtime } from '../dist/command-context.js'
@@ -16,6 +17,41 @@ import { gateTarget } from '../dist/panel-input.js'
 import { flushAnswers } from '../dist/orchestrator.js'
 import { shellOf, tmux } from '../dist/run.js'
 import { gitDirsOf } from '../dist/role-commands.js'
+
+test('real scratch tmux: JishuBuddy preserves multiline bracketed prompts and does not submit approval answers itself', { skip: spawnSync('tmux', ['-V']).status !== 0, timeout: 15000 }, async t => {
+  const root = mkdtempSync(join(tmpdir(), 'troupe-jishubuddy-tmux-'))
+  const socket = `troupe-jishu-${process.pid}-${randomUUID().slice(0, 8)}`
+  const env = { ...hostless(process.env), TMUX: undefined, TMUX_PANE: undefined, TROUPE_TMUX_SOCKET: socket }
+  const activity = join(root, 'activity.json')
+  const trace = join(root, 'trace.jsonl')
+  const command = join(root, 'rpc')
+  copyFileSync(fileURLToPath(new URL('./fixtures/jishubuddy-rpc.mjs', import.meta.url)), command)
+  chmodSync(command, 0o755)
+  t.after(() => {
+    tmux(['kill-session', '-t', 'probe'], undefined, env)
+    rmSync(root, { recursive: true, force: true })
+  })
+  const argv = ['env', `TROUPE_TEST_TRACE=${trace}`, process.execPath, fileURLToPath(new URL('../dist/cli.js', import.meta.url)),
+    'jishubuddy', '--command', command, '--activity', activity, '--bridge-session', 'tmux-session', '--approval', 'ask']
+  const started = tmux(['new-session', '-d', '-s', 'probe', '-x', '120', '-y', '40', shellOf(argv)], undefined, env)
+  assert.equal(started.code, 0, started.err)
+  const waitFor = async turn => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (existsSync(activity) && JSON.parse(readFileSync(activity, 'utf8')).turn === turn) return
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    assert.fail(`JishuBuddy never reported ${turn}: ${tmux(['capture-pane', '-p', '-t', 'probe'], undefined, env).out}`)
+  }
+  await waitFor('ready')
+  const message = 'first line\nsecond line'
+  assert.equal(tmux(['load-buffer', '-'], undefined, env, { input: message }).code, 0)
+  assert.equal(tmux(['paste-buffer', '-p', '-t', 'probe'], undefined, env).code, 0)
+  assert.equal(tmux(['send-keys', '-t', 'probe', 'Enter'], undefined, env).code, 0)
+  await waitFor('waits')
+  const requests = readFileSync(trace, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual(requests.filter(request => request.type === 'prompt').map(request => request.message), [message])
+  assert.ok(!requests.some(request => request.type === 'extension_ui_response'))
+})
 
 test('real scratch tmux: open marks one panel, keeps focus, and is a no-op the second time', { skip: spawnSync('tmux', ['-V']).status !== 0, timeout: 15000 }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'troupe-open-integration-'))

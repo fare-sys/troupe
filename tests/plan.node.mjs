@@ -116,7 +116,7 @@ roles:
     'role z: use names no profile "nope"',
     '## Role: ghost names no role in the yaml block',
     'role Web: a name is lower case letters, digits and -, starting with a letter',
-    'role x: unknown agent "gemini" (claude, codex)',
+    'role x: unknown agent "gemini" (claude, codex, copilot, jishubuddy)',
     'role z: no text (a ## Role: z section, or text:)',
   ])
 })

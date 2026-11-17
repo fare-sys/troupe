@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
 
 import { execute } from './commands.ts'
-import { recordActivity } from './activity.ts'
+import { recordActivity, recordCopilotActivity } from './activity.ts'
 import { statusLine } from './statusline.ts'
 
 const COMMANDS: [string, string][] = [
@@ -35,7 +35,7 @@ const usage = () =>
     '  -m, --mission <name>  mission under docs/missions (default: this pane\'s mission,',
     '                        else the mission branch checked out here)',
     '  setup [--remove] · mission new <name> [--base <ref>] · open [--planning]',
-    '  up -m <mission> [--orch claude|codex]',
+    '  up -m <mission> [--orch claude|codex|copilot|jishubuddy]',
     '  gate <id> ["question"] [--no-wait] · stage <id>',
     '  dispatch <role> · send <role> <text…> (or stdin)',
     '  status [--json] [--watch] · close <role> | --all',
@@ -57,6 +57,18 @@ if (arg === '--version' || arg === '-v') {
   console.log(version())
 } else if (arg === undefined || arg === '--help' || arg === '-h') {
   process.stdout.write(usage())
+} else if (arg === 'jishubuddy') {
+  const { runJishuBuddy } = await import('./jishubuddy.ts')
+  process.exitCode = await runJishuBuddy(rest)
+} else if (arg === 'copilot-activity' && rest[0] !== undefined && rest[1] !== undefined) {
+  let input = ''
+  for await (const chunk of process.stdin) input += chunk
+  try {
+    recordCopilotActivity(input, rest[0], rest[1])
+  } catch (error) {
+    process.stderr.write(`troupe Copilot hook: ${(error as Error).message}\n`)
+    process.exitCode = 1
+  }
 } else if (arg === 'activity' && rest[0] !== undefined) {
   // Internal: the lifecycle hooks troupe gives a Claude role (see roleSettings in role-commands.ts).
   let input = ''

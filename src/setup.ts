@@ -3,9 +3,12 @@ import { dirname, join } from 'node:path'
 
 import { Refusal } from './command-context.ts'
 import type { Reply, Runtime } from './command-context.ts'
+import { HARNESSES } from './agents.ts'
 
 export const INSTALL_MARKER = '.troupe-install.json'
-export const skillTarget = (r: Runtime, agent: string): string => join(r.home, agent === 'claude' ? '.claude/skills/troupe-mission' : '.agents/skills/troupe-mission')
+export const skillTarget = (r: Runtime, agent: string): string => agent === 'copilot'
+  ? join(r.env.COPILOT_HOME || join(r.home, '.copilot'), 'skills/troupe-mission')
+  : join(r.home, agent === 'claude' ? '.claude/skills/troupe-mission' : '.agents/skills/troupe-mission')
 export const available = (r: Runtime, command: string): boolean => r.run('which', [command]).code === 0
 
 // The package was called @troupe/cli before it took the name troupe-cli; copies marked either way are ours.
@@ -55,13 +58,19 @@ export const installSkill = (r: Runtime, agent: string, remove = false): string 
 }
 
 export const setup = (r: Runtime, remove = false): Reply => {
-  const agents = remove ? ['claude', 'codex'] : [
+  const agents = remove ? [...HARNESSES] : [
     ...(available(r, 'claude') || existsSync(join(r.home, '.claude')) ? ['claude'] : []),
     ...(available(r, 'codex') ? ['codex'] : []),
+    ...(available(r, 'copilot') ? ['copilot'] : []),
+    ...(available(r, 'jishubuddy') ? ['jishubuddy'] : []),
   ]
+  const targets = new Set<string>()
   const lines: string[] = []
   let code = 0
   for (const agent of agents) {
+    const target = skillTarget(r, agent)
+    if (targets.has(target)) continue
+    targets.add(target)
     try {
       lines.push(installSkill(r, agent, remove))
     } catch (error) {
