@@ -6,7 +6,7 @@ import type { Yaml } from './yaml.ts'
 // Stages projected for the panel's STAGES column (`id`, `label`, optional `gate`).
 // Workflows own stage definitions; `stagesOfWorkflow` projects them for `modelOf`.
 
-export type Stage = { id: string; label: string; gate?: string }
+export type Stage = { id: string; label: string; gate?: string; skipIfEmpty?: string }
 
 /** Projects a workflow's stage definitions into panel Stage descriptors. */
 export const stagesOfWorkflow = (workflow: Workflow): Stage[] =>
@@ -14,12 +14,15 @@ export const stagesOfWorkflow = (workflow: Workflow): Stage[] =>
     id: stage.id,
     label: stage.label,
     ...(stage.gate === undefined ? {} : { gate: stage.gate }),
+    ...(stage.skipIfEmpty === undefined ? {} : { skipIfEmpty: stage.skipIfEmpty }),
   }))
 
 /** The stages of the default `delivery` workflow, used as a fallback when no workflow resolves. */
 export const DEFAULT_STAGES: Stage[] = [
   { id: 'plan', label: 'Plan' },
   { id: 'plan-ok', label: 'Plan OK?', gate: PLAN_GATE },
+  { id: 'spec', label: 'Spec' },
+  { id: 'spec-ok', label: 'Spec OK?', gate: 'spec-ok', skipIfEmpty: 'spec' },
   { id: 'build', label: 'Build' },
   { id: 'review', label: 'Review' },
   { id: 'mr-ok', label: 'MR OK?', gate: 'mr-ok' },

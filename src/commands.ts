@@ -7,7 +7,7 @@ import { AGENTS, HARNESSES } from './agents.ts'
 import { loadDuties } from './duties.ts'
 import { launchAgent } from './harness.ts'
 import { langOf, WRITE_CHINESE } from './i18n.ts'
-import { clean, mux, NAME, Refusal, repository, runtime, Usage } from './command-context.ts'
+import { clean, mux, NAME, Refusal, repository, runtime, skippedGatesOf, Usage } from './command-context.ts'
 import type { Mission, Reply, Runtime } from './command-context.ts'
 import { append, fold, isApproved, logPath, PLAN_GATE, readLog } from './log.ts'
 import { callerOf, dropMission, finished, heldBy, markedPanes, mission, missionList, newMission, planOf, resolveMission, Unresolved } from './missions.ts'
@@ -124,7 +124,7 @@ const stage = (m: Mission, name: string): Reply => {
   if (!m.workflow.stages.some(one => one.id === name)) {
     throw new Refusal(`unknown stage ${name}; choose ${m.workflow.stages.map(one => one.id).join(', ')}`)
   }
-  const blocked = unapprovedGatesBefore(m.workflow, name, m.folded.gates, isApproved(m.folded, m.hash))
+  const blocked = unapprovedGatesBefore(m.workflow, name, m.folded.gates, isApproved(m.folded, m.hash), skippedGatesOf(m))
   if (blocked.length > 0) {
     throw new Refusal(`cannot enter stage ${name}: gate ${blocked.join(', ')} is not approved yet`)
   }
@@ -149,7 +149,7 @@ const workflowCommand = (r: Runtime, pos: string[], json: boolean): Reply => {
     if (json) return { code: problems.length > 0 ? 1 : 0, out: `${JSON.stringify({ workflows: items, problems })}\n` }
     const lines = items.map(wf => {
       const flow = wf.stages
-        .map(one => (one.gate !== undefined ? `[${one.gate}]` : one.duties.length > 0 ? `${one.id}(${one.duties.join(',')})` : one.id))
+        .map(one => (one.gate !== undefined ? `[${one.gate}${one.skipIfEmpty !== undefined ? '?' : ''}]` : one.duties.length > 0 ? `${one.id}(${one.duties.join(',')})` : one.id))
         .join(' -> ')
 
       return `${wf.name}${wf.name === DEFAULT_WORKFLOW ? ' (default)' : ''} [${wf.source}] · ${flow}\n  ${wf.summary}`
@@ -173,6 +173,7 @@ const workflowCommand = (r: Runtime, pos: string[], json: boolean): Reply => {
   const stageLines = wf.stages.map((one, idx) => {
     const details = [
       ...(one.gate !== undefined ? [`gate: ${one.gate}`] : []),
+      ...(one.skipIfEmpty !== undefined ? [`skipped when ${one.skipIfEmpty} has no roles`] : []),
       ...(one.duties.length > 0 ? [`duties: ${one.duties.join(', ')}`] : []),
       ...(one.required ? ['required'] : []),
       ...(one.skills.length > 0 ? [`skills: ${one.skills.join(', ')}`] : []),
@@ -466,6 +467,10 @@ export const execute = async (command: string, args: string[], overrides: Partia
     if (command === 'stage') return stage(m, id(pos[0], 'stage'))
     if (command === 'gate') {
       const gate = id(pos[0], 'gate')
+      if (skippedGatesOf(m).has(gate)) {
+        const guarded = m.workflow?.stages.find(one => one.gate === gate)?.skipIfEmpty
+        throw new Refusal(`gate ${gate} is skipped: the plan schedules no task role in stage ${guarded}`)
+      }
       append(m.log, 'cli', { ev: 'gate-open', gate, ...(pos[1] === undefined ? {} : { ask: pos[1] }), ...(gate === PLAN_GATE ? { plan: m.hash } : {}) })
       return values['no-wait'] ? { code: 0, out: `Opened gate ${gate}\n` } : await wait(r, m, { gate })
     }

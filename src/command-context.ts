@@ -13,6 +13,7 @@ import { run, tmux } from './run.ts'
 import type { Ran, Run, RunOptions } from './run.ts'
 import { DEFAULT_STAGES, stagesOfWorkflow } from './stages.ts'
 import type { Stage } from './stages.ts'
+import { skippedGates, skippedStageIds } from './workflows.ts'
 import type { Workflow } from './workflows.ts'
 
 export type Reply = { out: string; code: number }
@@ -101,6 +102,14 @@ export const within = (root: string, ref: string): string => {
 
 export const stagesOf = (m: Pick<Mission, 'workflow'>): Stage[] =>
   m.workflow === undefined ? DEFAULT_STAGES : stagesOfWorkflow(m.workflow)
+
+/** Gates the mission's plan skips: their `skip_if_empty` stage has no task role. */
+export const skippedGatesOf = (m: Pick<Mission, 'workflow' | 'plan'>): Set<string> =>
+  m.workflow === undefined ? new Set() : skippedGates(m.workflow, m.plan.roles)
+
+/** Stages the mission's plan skips: each skipped gate stage and its empty guarded stage. */
+export const skippedStagesOf = (m: Pick<Mission, 'workflow' | 'plan'>): Set<string> =>
+  m.workflow === undefined ? new Set() : skippedStageIds(m.workflow.stages, m.plan.roles.map(role => role.stage))
 
 export const roleText = (root: string, ref: string): { ref: string; bytes: string | undefined } => {
   if (ref === '') return { ref, bytes: undefined }

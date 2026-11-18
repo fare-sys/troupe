@@ -15,7 +15,7 @@ import { mission } from '../dist/missions.js'
 import { readPlan } from '../dist/plan.js'
 import { loadProfiles, readProfile } from '../dist/profiles.js'
 import { briefOf } from '../dist/role-commands.js'
-import { afterGateApproval, builtinWorkflows, loadWorkflows, readWorkflow } from '../dist/workflows.js'
+import { afterGateApproval, builtinWorkflows, effectiveStageId, loadWorkflows, readWorkflow, skippedGates, skippedStageIds } from '../dist/workflows.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 
@@ -429,6 +429,91 @@ test('AC-4 & AC-5: runtime stage/gate guards, duty briefs, and approval hash inv
     readFileSync(join(ROOT, 'workflows/design-first.md'), 'utf8') + '\nExtra playbook note.\n',
   )
   assert.notEqual(mission(r, 'df').hash, hashBefore)
+})
+
+test('skip_if_empty: an optional spec stage gates build only when the plan schedules spec roles', async t => {
+  const wfText = ({ planGate = '', spec = '', specGate = '    skip_if_empty: spec\n', build = '' } = {}) =>
+    [
+      '---',
+      'summary: probe',
+      'stages:',
+      '  - id: plan',
+      '  - id: plan-ok',
+      '    gate: plan',
+      `${planGate}  - id: spec`,
+      '    duties: [architect]',
+      `${spec}  - id: spec-ok`,
+      '    gate: spec-ok',
+      `${specGate}  - id: build`,
+      '    duties: [builder]',
+      '    required: true',
+      `${build}---`,
+      'Body.',
+      '',
+    ].join('\n')
+
+  // 1. Parsing: valid on a non-plan gate naming an earlier optional execution stage; refused otherwise.
+  assert.equal(readWorkflow('probe', wfText()).stages.find(stage => stage.id === 'spec-ok').skipIfEmpty, 'spec')
+  assert.throws(() => readWorkflow('probe', wfText({ planGate: '    skip_if_empty: spec\n' })), /only valid on a non-plan gate stage/)
+  assert.throws(() => readWorkflow('probe', wfText({ specGate: '', build: '    skip_if_empty: spec\n' })), /only valid on a non-plan gate stage/)
+  assert.throws(() => readWorkflow('probe', wfText({ specGate: '    skip_if_empty: build\n' })), /must name an earlier execution stage id \(got "build"\)/)
+  assert.throws(() => readWorkflow('probe', wfText({ specGate: '    skip_if_empty: plan\n' })), /must name an earlier execution stage id \(got "plan"\)/)
+  assert.throws(() => readWorkflow('probe', wfText({ spec: '    required: true\n' })), /cannot name required stage "spec"/)
+
+  // 2. After plan approval the mission stands on build when spec is empty, on spec otherwise.
+  const delivery = builtinWorkflows().delivery
+  assert.deepEqual([...skippedStageIds(delivery.stages, ['build', 'review'])].sort(), ['spec', 'spec-ok'])
+  assert.deepEqual([...skippedGates(delivery, [{ stage: 'build' }])], ['spec-ok'])
+  assert.equal(effectiveStageId(delivery, { stage: '' }, true, skippedStageIds(delivery.stages, ['build'])), 'build')
+  assert.equal(effectiveStageId(delivery, { stage: '' }, true, skippedStageIds(delivery.stages, ['spec', 'build'])), 'spec')
+
+  // 3. Runtime: the same delivery workflow with and without a spec role.
+  const { root, home } = initGitRepo(t)
+  const planOf = withSpec => [
+    '# Spec probe',
+    '',
+    '## Done when',
+    '',
+    '- It ships.',
+    '',
+    '```yaml',
+    'troupe: 2',
+    'goal: Probe the optional spec stage',
+    'why: Gate skipping',
+    'workflow: delivery',
+    'base: main',
+    'roles:',
+    ...(withSpec ? ['  spec:', '    duty: architect', '    agent: claude', '    flags: [--permission-mode, acceptEdits]', '    touches: []'] : []),
+    '  api:',
+    '    duty: builder',
+    '    agent: claude',
+    '    flags: [--permission-mode, acceptEdits]',
+    '    touches: [src/]',
+    ...(withSpec ? ['    depends_on: [spec]'] : []),
+    '```',
+    '',
+    ...(withSpec ? ['## Role: spec', '', 'Write the spec.', ''] : []),
+    '## Role: api',
+    '',
+    'Implement it.',
+    '',
+  ].join('\n')
+  write(join(root, 'docs/missions/with-spec/plan.md'), planOf(true))
+  write(join(root, 'docs/missions/no-spec/plan.md'), planOf(false))
+  const r = runtime({ cwd: root, home, env: { LC_ALL: 'C', LANG: 'C' }, inputTTY: true, outputTTY: true, write: () => {}, ask: async () => 'y' })
+
+  assert.equal((await execute('approve', ['-m', 'with-spec'], r)).code, 0)
+  assert.match((await execute('stage', ['-m', 'with-spec', 'build'], r)).out, /cannot enter stage build: gate spec-ok is not approved yet/)
+  assert.equal((await execute('stage', ['-m', 'with-spec', 'spec'], r)).code, 0)
+  assert.equal((await execute('gate', ['-m', 'with-spec', 'spec-ok', 'Spec OK?', '--no-wait'], r)).code, 0)
+  append(mission(r, 'with-spec').log, 'panel', { ev: 'gate-answer', gate: 'spec-ok', answer: 'approve' })
+  assert.equal((await execute('stage', ['-m', 'with-spec', 'build'], r)).code, 0)
+
+  assert.equal((await execute('approve', ['-m', 'no-spec'], r)).code, 0)
+  assert.match((await execute('gate', ['-m', 'no-spec', 'spec-ok', '--no-wait'], r)).out, /gate spec-ok is skipped: the plan schedules no task role in stage spec/)
+  assert.equal((await execute('stage', ['-m', 'no-spec', 'build'], r)).code, 0)
+
+  assert.match((await execute('workflow', ['list'], r)).out, /delivery \(default\) \[built-in\] · plan -> \[plan\] -> spec\(architect,researcher\) -> \[spec-ok\?\] -> build/)
 })
 
 test('AC-5: teardown honors workflow require_merge and require_push policies on real git worktrees', async t => {

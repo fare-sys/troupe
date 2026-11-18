@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { argvOf, optionOf, screenOf } from './agents.ts'
 import type { Agent, Screen } from './agents.ts'
 import { ACTIVITY_EVENTS, ACTIVITY_FILE, claudeTurn, reportedActivity } from './activity.ts'
-import { clean, excludeTroupe, git, mux, Refusal, stagesOf, within } from './command-context.ts'
+import { clean, excludeTroupe, git, mux, Refusal, skippedGatesOf, skippedStagesOf, stagesOf, within } from './command-context.ts'
 import type { Mission, Reply, Runtime } from './command-context.ts'
 import { langOf, WRITE_CHINESE_ROLE } from './i18n.ts'
 import type { Lang } from './i18n.ts'
@@ -201,11 +201,11 @@ export const dispatch = async (r: Runtime, initial: Mission, name: string): Prom
   const role = m.plan.roles.find(role => role.name === name)
   if (role === undefined) throw new Refusal(`unknown role: ${name}`)
   if (m.workflow !== undefined && role.stage !== '') {
-    const activeStage = effectiveStageId(m.workflow, m.folded, true)
+    const activeStage = effectiveStageId(m.workflow, m.folded, true, skippedStagesOf(m))
     if (activeStage !== role.stage) {
       throw new Refusal(`role ${name} belongs to stage "${role.stage}", while mission ${m.name} is in stage "${activeStage}"; run troupe stage ${role.stage} first`)
     }
-    const unapproved = unapprovedGatesBefore(m.workflow, role.stage, m.folded.gates, isApproved(m.folded, m.hash))
+    const unapproved = unapprovedGatesBefore(m.workflow, role.stage, m.folded.gates, isApproved(m.folded, m.hash), skippedGatesOf(m))
     if (unapproved.length > 0) {
       throw new Refusal(
         `cannot dispatch role ${name} in stage ${role.stage}: gate${unapproved.length === 1 ? '' : 's'} ${unapproved.join(', ')} ${unapproved.length === 1 ? 'is' : 'are'} not approved yet`,
@@ -342,8 +342,9 @@ export const teardown = async (r: Runtime, initial: Mission, force: boolean): Pr
     reasons.push('plan or workflow changed since approval; run troupe approve or pass --force')
   }
   // Teardown deletes the windows a requested change would go to: every gate the workflow declares is approved first (#48).
+  const skipped = skippedGatesOf(m)
   if (!force) for (const stage of stagesOf(m)) {
-    if (stage.gate !== undefined && m.folded.gates.get(stage.gate)?.answer !== 'approve') reasons.push(`gate ${stage.gate}: not approved yet; teardown waits for it`)
+    if (stage.gate !== undefined && !skipped.has(stage.gate) && m.folded.gates.get(stage.gate)?.answer !== 'approve') reasons.push(`gate ${stage.gate}: not approved yet; teardown waits for it`)
   }
   for (const tree of trees) {
     if (resolve(dirname(tree.path)) !== parent || !tree.branch.startsWith(prefix)) reasons.push(`${tree.path}: unexpected worktree location or branch; remove manually`)

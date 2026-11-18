@@ -8,6 +8,7 @@ import type { Plan, Role } from './plan.ts'
 import type { Stage } from './stages.ts'
 import type { Result, RoleState, Work } from './state.ts'
 import type { Tokens } from './usage.ts'
+import { firstStageAfterPlan, skippedStageIds } from './workflows.ts'
 
 // What the panel draws, built from the files: the plan, the folded log, the
 // workflow's stages and what was read live for each role. Pure: the panel
@@ -145,7 +146,9 @@ export const modelOf = (input: ModelInput): PanelModel => {
 
   const planIndex = stages.findIndex(stage => stage.gate === PLAN_GATE)
   const named = stages.findIndex(stage => stage.id === folded.stage)
-  const current = !approved ? (planOpen ? planIndex : Math.max(0, Math.min(planIndex, named === -1 ? 0 : named))) : named === -1 ? planIndex + 1 : Math.max(named, planIndex + 1)
+  // A gate whose `skip_if_empty` stage has no task role is skipped, and so is that empty stage.
+  const skippedIds = skippedStageIds(stages, roles.map(role => role.group))
+  const current = !approved ? (planOpen ? planIndex : Math.max(0, Math.min(planIndex, named === -1 ? 0 : named))) : named <= planIndex ? firstStageAfterPlan(stages, planIndex, skippedIds) : named
   const stageViews = stages.map((stage, index): StageView => {
     const answered = stage.gate === undefined ? undefined : folded.gates.get(stage.gate)
     const group = roles.filter(role => role.group === stage.id)
@@ -173,7 +176,8 @@ export const modelOf = (input: ModelInput): PanelModel => {
     problems: plan.problems,
     decisions: decisionsOf(input.planText),
     stage: stageViews[current],
-    stages: stageViews,
+    // Skipped stages stay out of the STAGES column unless the mission explicitly stands on one.
+    stages: stageViews.filter((stage, index) => index === current || !skippedIds.has(stage.id)),
     roles,
     gate,
     activity: [...input.log].reverse().map(e => ({ at: clockOf(e.at), text: describe(e, labelOf) })),

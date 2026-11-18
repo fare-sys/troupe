@@ -240,8 +240,10 @@ const renderStarterPlan = (
   const roleEntries: { name: string; stageId: string; dutyName: string; duty: DutyRole; upstream: string[] }[] = []
   const upstreamNames: string[] = []
   const usedNames = new Set<string>()
+  const hasRequiredStage = executionStages.some(stage => stage.required)
   for (const stage of executionStages) {
-    if (!stage.required && roleEntries.length > 0 && stage.duties[0] !== 'reviewer') continue
+    // Seed optional stages (such as a skippable spec stage) only when nothing else would be seeded.
+    if (!stage.required && (roleEntries.length > 0 || hasRequiredStage) && stage.duties[0] !== 'reviewer') continue
     const dutyName = stage.duties[0]!
     const duty = duties[dutyName]
     if (duty === undefined) continue

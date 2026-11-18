@@ -26,6 +26,11 @@ export type WorkflowStage = {
   required: boolean
   /** Default skills every task role running in this stage is asked to load. */
   skills: string[]
+  /**
+   * On a gate stage: the earlier optional execution stage this gate guards. When the plan
+   * schedules no task role in that stage, the gate is skipped instead of awaiting approval.
+   */
+  skipIfEmpty?: string
 }
 
 export type WorkflowTeardown = {
@@ -53,7 +58,7 @@ const isMap = (value: Yaml | undefined): value is YamlMap =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const WORKFLOW_KEYS = ['name', 'summary', 'stages', 'teardown'] as const
-const STAGE_KEYS = ['id', 'label', 'gate', 'next', 'duties', 'required', 'skills'] as const
+const STAGE_KEYS = ['id', 'label', 'gate', 'next', 'duties', 'required', 'skills', 'skip_if_empty'] as const
 const TEARDOWN_KEYS = ['require_merge', 'require_push'] as const
 
 const readBool = (value: Yaml | undefined, fallback: boolean, fail: (why: string) => never): boolean => {
@@ -151,6 +156,17 @@ export const readWorkflow = (
       return fail('stages', `stage ${id}: "skills" requires nonempty "duties" (only execution stages run task roles)`)
     }
 
+    const skipIfEmpty =
+      entry.skip_if_empty === undefined ? undefined : typeof entry.skip_if_empty === 'string' ? entry.skip_if_empty.trim() : ''
+    if (skipIfEmpty !== undefined) {
+      if (gate === undefined || gate === PLAN_GATE) {
+        return fail('stages', `stage ${id}: "skip_if_empty" is only valid on a non-plan gate stage`)
+      }
+      if (skipIfEmpty === '' || !ENTITY_NAME.test(skipIfEmpty)) {
+        return fail('stages', `stage ${id}: "skip_if_empty" must name an earlier execution stage id`)
+      }
+    }
+
     return {
       id,
       label,
@@ -159,6 +175,19 @@ export const readWorkflow = (
       skills,
       ...(gate !== undefined ? { gate } : {}),
       ...(next !== undefined ? { next } : {}),
+      ...(skipIfEmpty !== undefined ? { skipIfEmpty } : {}),
+    }
+  })
+
+  stages.forEach((stage, index) => {
+    if (stage.skipIfEmpty === undefined) return
+    const guardedIndex = stages.findIndex(one => one.id === stage.skipIfEmpty)
+    const guarded = stages[guardedIndex]
+    if (guarded === undefined || guardedIndex >= index || guarded.duties.length === 0) {
+      fail('stages', `stage ${stage.id}: "skip_if_empty" must name an earlier execution stage id (got "${stage.skipIfEmpty}")`)
+    }
+    if (guarded?.required) {
+      fail('stages', `stage ${stage.id}: "skip_if_empty" cannot name required stage "${stage.skipIfEmpty}", which is never empty`)
     }
   })
 
@@ -281,12 +310,37 @@ export const afterGateApproval = (workflow: Workflow | undefined, gate: string, 
   return next === undefined ? 'Continue the mission.' : next.replaceAll('{mission}', () => mission)
 }
 
-/** Gate IDs strictly preceding `stageId` in `workflow` that have not been approved yet. */
+/** The stage fields that decide skipping; satisfied by both `WorkflowStage` and the panel's `Stage`. */
+export type SkippableStage = { id: string; gate?: string; skipIfEmpty?: string }
+
+/**
+ * Stage IDs skipped for a plan: every `skip_if_empty` gate stage whose guarded stage has no
+ * task role in `scheduledStages`, plus that empty guarded stage.
+ */
+export const skippedStageIds = (stages: readonly SkippableStage[], scheduledStages: Iterable<string>): Set<string> => {
+  const scheduled = new Set(scheduledStages)
+
+  return new Set(
+    stages.flatMap(stage =>
+      stage.gate !== undefined && stage.skipIfEmpty !== undefined && !scheduled.has(stage.skipIfEmpty) ? [stage.id, stage.skipIfEmpty] : [],
+    ),
+  )
+}
+
+/** Gate IDs in `workflow` that are skipped for a plan whose task roles resolve to `roles[].stage`. */
+export const skippedGates = (workflow: Workflow, roles: readonly { stage: string }[]): Set<string> => {
+  const skipped = skippedStageIds(workflow.stages, roles.map(role => role.stage))
+
+  return new Set(workflow.stages.flatMap(stage => (stage.gate !== undefined && skipped.has(stage.id) ? [stage.gate] : [])))
+}
+
+/** Gate IDs strictly preceding `stageId` in `workflow` that have not been approved yet, ignoring `skipped` gates. */
 export const unapprovedGatesBefore = (
   workflow: Workflow,
   stageId: string,
   gates: ReadonlyMap<string, { answer?: string }>,
   planApproved: boolean,
+  skipped: ReadonlySet<string> = new Set(),
 ): string[] => {
   const index = workflow.stages.findIndex(stage => stage.id === stageId)
   if (index <= 0) return []
@@ -294,7 +348,7 @@ export const unapprovedGatesBefore = (
   return workflow.stages
     .slice(0, index)
     .flatMap(stage => {
-      if (stage.gate === undefined) return []
+      if (stage.gate === undefined || skipped.has(stage.gate)) return []
       const ok = stage.gate === PLAN_GATE ? planApproved : gates.get(stage.gate)?.answer === 'approve'
 
       return ok ? [] : [stage.gate]
@@ -302,11 +356,27 @@ export const unapprovedGatesBefore = (
 }
 
 /**
+ * Index of the stage a mission stands on right after plan approval: the first stage after the
+ * plan gate that is not in `skipped` (stage IDs from `skippedStageIds`).
+ */
+export const firstStageAfterPlan = (stages: readonly SkippableStage[], planIndex: number, skipped: ReadonlySet<string> = new Set()): number => {
+  let index = planIndex + 1
+  while (index < stages.length - 1 && skipped.has(stages[index]?.id ?? '')) index += 1
+
+  return index
+}
+
+/**
  * Resolves the mission's effective active stage in `workflow`, matching `modelOf`:
  * once the plan gate is approved and before an explicit post-plan `troupe stage <id>`,
- * the mission stands on the stage immediately following the plan gate.
+ * the mission stands on the first non-skipped stage following the plan gate.
  */
-export const effectiveStageId = (workflow: Workflow, folded: Pick<Folded, 'stage'>, planApproved: boolean): string => {
+export const effectiveStageId = (
+  workflow: Workflow,
+  folded: Pick<Folded, 'stage'>,
+  planApproved: boolean,
+  skipped: ReadonlySet<string> = new Set(),
+): string => {
   const planIndex = workflow.stages.findIndex(stage => stage.gate === PLAN_GATE)
   const namedIndex = workflow.stages.findIndex(stage => stage.id === folded.stage)
   if (!planApproved) {
@@ -314,7 +384,8 @@ export const effectiveStageId = (workflow: Workflow, folded: Pick<Folded, 'stage
 
     return workflow.stages[index]?.id ?? ''
   }
-  const index = namedIndex < 0 ? planIndex + 1 : Math.max(namedIndex, planIndex + 1)
+  const first = firstStageAfterPlan(workflow.stages, planIndex, skipped)
+  const index = namedIndex <= planIndex ? first : namedIndex
 
   return workflow.stages[index]?.id ?? folded.stage
 }

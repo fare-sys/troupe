@@ -65,10 +65,17 @@ drives any workflow by reference (`workflow: <name>` in `plan.md`, or
 `-w, --workflow <name>` on `mission new` / `up`).
 
 - **Built-in workflows** ([`workflows/`](../workflows/)):
-  - `delivery` (default): `plan -> [plan] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
+  - `delivery` (default): `plan -> [plan] -> spec(architect,researcher) -> [spec-ok?] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
   - `design-first`: `plan -> [plan] -> design(architect,researcher) -> [design-ok] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
   - `investigation`: `plan -> [plan] -> explore(researcher,architect) -> synthesize(reviewer) -> [report-ok] -> teardown` (read-only; teardown requires neither merge nor push)
-  - `direct`: `plan -> [plan] -> build(builder) -> verify(tester,reviewer) -> integrate -> [accept-ok] -> teardown` (local branch integration without remote push/MR)
+  - `direct`: `plan -> [plan] -> spec(architect,researcher) -> [spec-ok?] -> build(builder) -> verify(tester,reviewer) -> integrate -> [accept-ok] -> teardown` (local branch integration without remote push/MR)
+
+  `spec` is optional in `delivery` and `direct`: schedule `architect` or
+  `researcher` roles there to settle requirements, an implementation plan, or
+  the architecture before building. `[spec-ok?]` declares
+  `skip_if_empty: spec`, so the gate is skipped when the plan has no `spec`
+  roles. Any workflow can put `skip_if_empty: <stage>` on a non-plan gate that
+  follows an optional execution stage.
 - **Built-in duty roles** ([`roles/`](../roles/)): `builder`, `reviewer`,
   `architect`, `researcher`, and `tester`. Each defines YAML front matter
   (`name`, `summary`, `touches`, `startup`, `reviews`) and Markdown rules

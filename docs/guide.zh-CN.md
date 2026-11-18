@@ -63,10 +63,15 @@ workflow（在 `plan.md` 中声明 `workflow: <name>`，或在 `mission new` / `
 `-w, --workflow <name>`）。
 
 - **内置 workflow**（[`workflows/`](../workflows/)）：
-  - `delivery`（默认）：`plan -> [plan] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
+  - `delivery`（默认）：`plan -> [plan] -> spec(architect,researcher) -> [spec-ok?] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
   - `design-first`：`plan -> [plan] -> design(architect,researcher) -> [design-ok] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
   - `investigation`：`plan -> [plan] -> explore(researcher,architect) -> synthesize(reviewer) -> [report-ok] -> teardown`（只读调研，teardown 不要求合并与推送）
-  - `direct`：`plan -> [plan] -> build(builder) -> verify(tester,reviewer) -> integrate -> [accept-ok] -> teardown`（本地分支交付，不要求远程推送／开 PR）
+  - `direct`：`plan -> [plan] -> spec(architect,researcher) -> [spec-ok?] -> build(builder) -> verify(tester,reviewer) -> integrate -> [accept-ok] -> teardown`（本地分支交付，不要求远程推送／开 PR）
+
+  `delivery` 与 `direct` 的 `spec` 阶段可选：需要在开发前先明确需求、实施计划或架构时，
+  在该阶段安排 `architect` 或 `researcher` 角色。`[spec-ok?]` 声明了
+  `skip_if_empty: spec`，plan 中没有 `spec` 角色时该关卡自动跳过。任何 workflow 都可以在
+  紧跟可选执行阶段的非 plan 关卡上使用 `skip_if_empty: <stage>`。
 - **内置职责角色**（[`roles/`](../roles/)）：`builder`、`reviewer`、`architect`、
   `researcher`、`tester`。每个职责角色由 YAML front matter（`name`、`summary`、
   `touches`、`startup`、`reviews`）与 Markdown 守则组成，并在启动简报中自动注入给对应任务角色。

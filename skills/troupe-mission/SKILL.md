@@ -118,6 +118,12 @@ Edit `docs/missions/<mission>/plan.md` in the mission worktree by full path:
     allowed in multiple stages of `<workflow>`, set `stage: <stage-id>`
     explicitly.
   - Cover every stage marked `required` in `troupe workflow show <workflow>`.
+    Optional stages may stay empty; a gate shown as `[<gate-id>?]` (`skipped
+    when <stage> has no roles`) is skipped when its stage is empty. Schedule
+    `spec`-stage roles (`architect` or `researcher`, for example
+    `use: analyst`, `use: planner`, or `use: architect`) only when requirements,
+    an implementation plan, or the architecture must be settled and approved
+    before building.
   - Respect each duty's contract (`touches=required | optional | none` and
     `reviews=required | optional | forbidden`).
   - Prefer `use: <profile>` from `troupe profile list` when a shared profile
@@ -183,6 +189,9 @@ from first post-plan stage through teardown:
        `mission/<mission>` (`git -C <mission-worktree> merge ...`) strictly
        according to the active workflow's playbook, then dispatch newly
        unblocked roles or advance to the next stage.
+- **Skipped stages**: an optional execution stage with no task roles is not
+  entered, and a gate whose `skip_if_empty` stage is empty is skipped: go
+  straight to the next stage (`troupe gate <gate-id>` refuses a skipped gate).
 - **Entering a gate stage (`gate: <gate-id>`)**:
   1. Run `troupe stage <stage-id>`.
   2. Run `troupe gate <gate-id> "<concise summary and recommendation>"`.
