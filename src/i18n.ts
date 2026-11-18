@@ -29,6 +29,8 @@ export const saveLang = (home: string, lang: Lang): void => {
 
 /** What an agent is told when the person reads Chinese. */
 export const WRITE_CHINESE = 'Write everything the person reads in Simplified Chinese (简体中文): the plan\'s prose, gate questions, result summaries and messages. Keep in English what troupe reads: Markdown headings, YAML keys and values, role names, `status:` values, `**Recommended:**`, a review\'s leading `PASS` or `FAIL`, file paths and code.'
+/** What a dispatched role is told when the person reads Chinese. */
+export const WRITE_CHINESE_ROLE = 'Write everything the person reads in Simplified Chinese (简体中文): result summaries, result and review prose, and messages. Keep in English what troupe reads: YAML front matter keys, `status:` values, a review\'s leading `PASS` or `FAIL`, role names, file paths and code.'
 /** The line the orchestrator gets when the person switches the panel's language mid-mission. */
 export const switchedTo = (lang: Lang): string => lang === 'zh'
   ? `The person switched the panel to Chinese. ${WRITE_CHINESE} Tell the roles still working the same with troupe send.`

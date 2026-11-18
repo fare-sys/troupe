@@ -7,7 +7,7 @@ import type { Agent, Screen } from './agents.ts'
 import { ACTIVITY_EVENTS, ACTIVITY_FILE, claudeTurn, reportedActivity } from './activity.ts'
 import { clean, excludeTroupe, git, mux, Refusal, within, workflowStages } from './command-context.ts'
 import type { Mission, Reply, Runtime } from './command-context.ts'
-import { langOf, WRITE_CHINESE } from './i18n.ts'
+import { langOf, WRITE_CHINESE_ROLE } from './i18n.ts'
 import type { Lang } from './i18n.ts'
 import { append, isApproved } from './log.ts'
 import { launchAgent } from './harness.ts'
@@ -20,22 +20,39 @@ import { shellOf, tmux } from './run.ts'
 import { CONTEXT_FILE, statusLineCommand } from './statusline.ts'
 import { codexTurn, tokensOf } from './usage.ts'
 
-export const briefOf = (m: Mission, role: Role, worktree: string, branch: string, lang: Lang = 'en'): string => [
-  `# ${m.name}: ${role.name}`, '',
-  `Mission goal: ${m.plan.goal}`, `Why: ${m.plan.why}`, `Your goal: ${role.goal}`, '',
-  `Work in ${worktree} on branch ${branch}. Do not rename the branch.`,
-  `Change only these touches: ${role.touches.length > 0 ? role.touches.join(', ') : 'none; do not change repository files'}.`,
-  'Commit your changes on your branch.',
-  `Depends on: ${role.dependsOn.join(', ') || 'none'}.`,
-  `Skills to load: ${role.skills.join(', ') || 'none'}.`, '',
-  ...(lang === 'zh' ? [WRITE_CHINESE, ''] : []),
-  ...(m.texts.has(role.name) ? ['## Referenced instructions', '', m.texts.get(role.name) ?? '', ''] : []),
-  '## Your role', '', role.section, '',
-  '## Finish', '',
-  `Write ${RESULT_FILE} inside your worktree (create .troupe/ if needed), with this front matter:`, '',
-  '```markdown', '---', 'status: done', 'summary: "<one line>"', '---', '<What changed, how you checked it, open items for the orchestrator.>', '```', '',
-  'Use status: done, blocked or failed. Then stop. The result file is ignored by git; do not commit it.', '',
-].join('\n')
+export const briefOf = (m: Mission, role: Role, worktree: string, branch: string, lang: Lang = 'en'): string => {
+  const isReviewer = role.touches.length === 0 && role.reviews.length > 0
+
+  return [
+    `# ${m.name}: ${role.name}`, '',
+    `Mission goal: ${m.plan.goal}`,
+    ...(m.plan.why ? [`Why: ${m.plan.why}`] : []),
+    ...(role.goal ? [`Your goal: ${role.goal}`] : []),
+    '',
+    ...(m.plan.doneWhen.length > 0
+      ? ['## Done when', '', ...m.plan.doneWhen.map((item, index) => `${index + 1}. ${item}`), '']
+      : []),
+    `Work in ${worktree} on branch ${branch}. Do not rename or switch branches.`,
+    role.touches.length > 0
+      ? `Change only these touches: ${role.touches.join(', ')}. Commit your changes on your branch.`
+      : 'Change only these touches: none; do not change repository files or create commits.',
+    ...(role.reviews.length > 0 ? [`Reviews: ${role.reviews.join(', ')}.`] : []),
+    ...(role.skills.length > 0 ? [`Skills to load: ${role.skills.join(', ')}.`] : []),
+    '',
+    ...(lang === 'zh' ? [WRITE_CHINESE_ROLE, ''] : []),
+    ...(m.texts.has(role.name) ? ['## Referenced instructions', '', (m.texts.get(role.name) ?? '').trim(), ''] : []),
+    ...(role.section ? ['## Your role', '', role.section, ''] : []),
+    '## Finish', '',
+    ...(isReviewer
+      ? ['On initial startup before a branch is sent to you, read your instructions and the plan, then stop and wait without writing a result file. Once a branch is sent to you and reviewed:', '']
+      : []),
+    `Write ${RESULT_FILE} inside your worktree (create .troupe/ if needed; git ignores it, do not commit it):`, '',
+    '```markdown', '---', 'status: done', 'summary: "<one-line summary; keep double quotes>"',
+    ...(isReviewer ? ['done_when: [1, 3] # optional on PASS: 1-based Done-when numbers verified'] : []),
+    '---', '<What changed or was reviewed, how you verified it, open items for the orchestrator.>', '```', '',
+    'Use status: done, blocked or failed. Then stop.', '',
+  ].join('\n')
+}
 
 /** The matching dialog line from the same recent rows used by screenOf. */
 /** The dialog's line, in the adapter's pattern order: a header anywhere on the visible screen beats a footer. */

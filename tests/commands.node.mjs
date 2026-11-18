@@ -214,6 +214,63 @@ test('dispatch writes a complete brief, quoted argv and log event, refuses dupli
   assert.equal(readFileSync(join(w.root, '.git/info/exclude'), 'utf8').split('/.troupe/').length, 2)
 })
 
+test('briefOf tailors instructions for read-only reviewers, numbered done-when criteria, and Chinese role output', async t => {
+  const w = world(t)
+  w.write(join(w.home, '.config/troupe/settings.json'), '{"language":"zh"}\n')
+  w.write(
+    join(w.root, 'docs/missions/m1/plan.md'),
+    `# m1: Test
+
+## Done when
+
+- API returns 200
+- UI renders list
+
+\`\`\`yaml
+goal: Ship the feature
+why: People need it
+base: main
+roles:
+  api:
+    agent: fake
+    flags: [--policy, ask]
+    touches: [src/]
+  review:
+    agent: fake
+    flags: [--policy, ask]
+    touches: []
+    reviews: [api]
+\`\`\`
+
+## Role: api
+
+Build it.
+
+## Role: review
+
+Check contracts.
+`,
+  )
+  await w.approve()
+  assert.equal((await w.call('dispatch', 'api')).code, 0)
+  assert.equal((await w.call('dispatch', 'review')).code, 0)
+
+  const apiBrief = readFileSync(join(w.root, '.git/troupe/m1/brief-api.md'), 'utf8')
+  assert.ok(apiBrief.includes('1. API returns 200\n2. UI renders list'))
+  assert.ok(apiBrief.includes('Commit your changes on your branch.'))
+  assert.ok(!apiBrief.includes('Depends on:'))
+  assert.ok(!apiBrief.includes('Skills to load:'))
+  assert.ok(apiBrief.includes('Simplified Chinese (简体中文): result summaries'))
+  assert.ok(!apiBrief.includes('gate questions'))
+
+  const reviewBrief = readFileSync(join(w.root, '.git/troupe/m1/brief-review.md'), 'utf8')
+  assert.ok(reviewBrief.includes('do not change repository files or create commits.'))
+  assert.ok(!reviewBrief.includes('Commit your changes'))
+  assert.ok(reviewBrief.includes('Reviews: api.'))
+  assert.ok(reviewBrief.includes('before a branch is sent to you'))
+  assert.ok(reviewBrief.includes('done_when: [1, 3]'))
+})
+
 test('send refuses waits, working, unknown, drafts and other owners and rechecks immediately before paste', async t => {
   const w = world(t)
   assert.match((await w.call('send', 'api', 'hello')).out, /no open pane/)
