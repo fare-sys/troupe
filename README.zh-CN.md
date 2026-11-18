@@ -107,7 +107,7 @@ troupe setup
 编排者、职责角色、任务角色与 workflow 完全解耦：
 
 - **单一编排者**（[`skills/troupe-mission/SKILL.md`](skills/troupe-mission/SKILL.md)）不内嵌固定流程，按引用读取并执行当前 mission 指定的 workflow（`troupe up -m <mission> -w <workflow>` 或 `plan.md` 中的 `workflow: <name>`）。
-- **Workflow**（[`workflows/`](workflows/)）定义阶段顺序、各阶段允许的职责角色、人工审批关卡与收尾策略（内置 `delivery`、`design-first`、`investigation`、`direct`）。用 `troupe workflow list` / `troupe workflow show <name>` 查看，也可在 `.troupe/workflows/<name>.md` 或 `~/.config/troupe/workflows/<name>.md` 新增或覆盖。
+- **Workflow**（[`workflows/`](workflows/)）定义阶段顺序、各阶段允许的职责角色、人工审批关卡与收尾策略（内置 `delivery`、`design-first`、`investigation`、`direct`）。用 `troupe workflow list` / `troupe workflow show <name>` 查看，也可在 `.troupe/workflows/<name>.md` 或 `~/.config/troupe/workflows/<name>.md` 新增或覆盖。未指定 workflow 时，编排者也可以为该 mission 单独设计一个（`docs/missions/<m>/workflow.md`，以 `workflow: ./workflow.md` 引用），随计划一起由你批准。
 - **职责角色**（[`roles/`](roles/)）定义可复用的职责契约（`builder`、`reviewer`、`architect`、`researcher`、`tester`），而 `plan.md` 中的**任务角色**将具体的窗口／worktree 绑定到某个 `duty` 和 workflow `stage`。用 `troupe role list` / `troupe role show <duty>` 查看，或在 `.troupe/roles/<duty>.md` 与 `~/.config/troupe/roles/<duty>.md` 自定义。
 - **人设（profile）** 是任务角色的可复用模板（例如「前端设计师」= `builder` + 设计类 skill + 一段人设说明）。放在 `~/.config/troupe/profiles/<name>.md` 或 `.troupe/profiles/<name>.md`，用 `troupe profile list` / `troupe profile show <name>` 查看，编排者在 plan 中用 `use: <name>` 引用。Workflow 阶段也可声明默认 `skills`；任务角色的简报会要求加载阶段、人设与角色自身 skills 的并集。
 

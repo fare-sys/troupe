@@ -14,7 +14,7 @@ import { DEFAULT_WORKFLOW, readPlan } from './plan.ts'
 import { tmux } from './run.ts'
 import { loadProfiles } from './profiles.ts'
 import { planHash } from './state.ts'
-import { loadWorkflows, planTemplatePath } from './workflows.ts'
+import { loadWorkflows, MISSION_WORKFLOW, planTemplatePath, withMissionWorkflow } from './workflows.ts'
 import type { Workflow } from './workflows.ts'
 
 // Several missions can be open at once. Each has its own worktree on branch
@@ -161,16 +161,18 @@ export const mission = (r: Runtime, want = ''): Mission => {
   const loadedWorkflows = loadWorkflows(roots, r.home, r.packageRoot, loadedDuties.duties)
   const loadedProfiles = loadProfiles(roots, r.home, loadedDuties.duties)
   const source = readFileSync(path)
+  const catalog = withMissionWorkflow(path, loadedWorkflows.workflows, loadedDuties.duties)
   const plan = readPlan(source.toString('utf8'), loadedAgents.agents, {
     duties: loadedDuties.duties,
-    workflows: loadedWorkflows.workflows,
+    workflows: catalog.workflows,
     profiles: loadedProfiles.profiles,
   })
-  const workflow = loadedWorkflows.workflows[plan.workflow]
+  const workflow = catalog.workflows[plan.workflow]
   const problems = [
     ...loadedAgents.problems,
     ...loadedDuties.problems,
     ...loadedWorkflows.problems,
+    ...(plan.workflow === MISSION_WORKFLOW ? catalog.problems : []),
     ...loadedProfiles.problems,
     ...plan.problems,
     ...textProblems(worktree, plan),

@@ -99,6 +99,10 @@ workflow（在 `plan.md` 中声明 `workflow: <name>`，或在 `mission new` / `
   `<repo>/.troupe/roles/<duty>.md` 或 `~/.config/troupe/roles/<duty>.md` 新增／覆盖职责角色
   （优先级 `repo > user > built-in`）。修改被当前计划引用的 workflow、职责角色或人设文件会改变计划哈希，
   继续派发前需要重新批准。
+- **Mission 专属 workflow**：未指定 workflow 时，编排者可以为本次 mission 单独设计一个，
+  写在 `docs/missions/<m>/workflow.md`（格式相同，省略 `name`），并在计划中用
+  `workflow: ./workflow.md` 引用。troupe 会像对待其他 workflow 一样校验并强制执行；它计入计划哈希，
+  因此在 `plan` 关卡随计划一起批准，之后修改需要重新批准。
 
 ## 命令
 

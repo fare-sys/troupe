@@ -109,6 +109,12 @@ drives any workflow by reference (`workflow: <name>` in `plan.md`, or
   `~/.config/troupe/roles/<duty>.md` (`repo > user > built-in`). Edits to the
   active workflow, referenced duty files, or used shared profiles change the plan hash and require
   re-approval before further dispatches.
+- **Mission workflow**: when the person names no workflow, the orchestrator
+  may design one for this mission alone in `docs/missions/<m>/workflow.md`
+  (same format, `name` omitted) and reference it with
+  `workflow: ./workflow.md`. troupe validates and enforces it like any other
+  workflow; it is part of the plan hash, so the person approves it at the
+  `plan` gate and any later edit requires re-approval.
 
 ## Commands
 

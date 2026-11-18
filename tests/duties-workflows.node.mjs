@@ -431,6 +431,89 @@ test('AC-4 & AC-5: runtime stage/gate guards, duty briefs, and approval hash inv
   assert.notEqual(mission(r, 'df').hash, hashBefore)
 })
 
+test('mission workflow: a plan can reference its own workflow.md, validated, enforced, and hashed', async t => {
+  const { root, home } = initGitRepo(t)
+  const dir = join(root, 'docs/missions/custom')
+  const planText = [
+    '# Custom flow',
+    '',
+    '## Done when',
+    '',
+    '- It ships.',
+    '',
+    '```yaml',
+    'troupe: 2',
+    'goal: Probe a mission workflow',
+    'why: Orchestrator-designed flow',
+    'workflow: ./workflow.md',
+    'base: main',
+    'roles:',
+    '  probe:',
+    '    duty: researcher',
+    '    agent: claude',
+    '    flags: [--permission-mode, acceptEdits]',
+    '    touches: []',
+    '  api:',
+    '    duty: builder',
+    '    agent: claude',
+    '    flags: [--permission-mode, acceptEdits]',
+    '    touches: [src/]',
+    '    depends_on: [probe]',
+    '```',
+    '',
+    '## Role: probe',
+    '',
+    'Map the code.',
+    '',
+    '## Role: api',
+    '',
+    'Implement it.',
+    '',
+  ].join('\n')
+  const workflowText = duty => [
+    '---',
+    'summary: Research then build, landed locally',
+    'stages:',
+    '  - id: plan',
+    '  - id: plan-ok',
+    '    gate: plan',
+    '  - id: research',
+    `    duties: [${duty}]`,
+    '    required: true',
+    '  - id: build',
+    '    duties: [builder]',
+    '    required: true',
+    '  - id: accept',
+    '    gate: accept-ok',
+    'teardown:',
+    '  require_merge: false',
+    '  require_push: false',
+    '---',
+    'Research, build, then ask for acceptance.',
+    '',
+  ].join('\n')
+  write(join(dir, 'plan.md'), planText)
+  const r = runtime({ cwd: root, home, env: { LC_ALL: 'C', LANG: 'C' }, inputTTY: true, outputTTY: true, write: () => {}, ask: async () => 'y' })
+  const planPath = join(dir, 'plan.md')
+
+  assert.match((await execute('check', [planPath], r)).out, /workflow \.\/workflow\.md: no valid workflow\.md next to plan\.md/)
+
+  write(join(dir, 'workflow.md'), workflowText('wizard'))
+  assert.match((await execute('check', [planPath], r)).out, /workflow\.md: workflow "\.\/workflow\.md" stage "research" references unknown duty "wizard"/)
+
+  write(join(dir, 'workflow.md'), workflowText('researcher'))
+  assert.match((await execute('check', [planPath], r)).out, /clean \(workflow \.\/workflow\.md; 2 roles: probe\[researcher@research\], api\[builder@build\]\)/)
+  const loaded = mission(r, 'custom')
+  assert.equal(loaded.workflow.source, 'mission')
+  assert.deepEqual(loaded.workflow.teardown, { requireMerge: false, requirePush: false })
+
+  write(join(dir, 'workflow.md'), workflowText('researcher').replace('landed locally', 'landed on a branch'))
+  assert.notEqual(mission(r, 'custom').hash, loaded.hash)
+
+  assert.equal((await execute('approve', ['-m', 'custom'], r)).code, 0)
+  assert.equal((await execute('stage', ['-m', 'custom', 'research'], r)).code, 0)
+})
+
 test('skip_if_empty: an optional spec stage gates build only when the plan schedules spec roles', async t => {
   const wfText = ({ planGate = '', spec = '', specGate = '    skip_if_empty: spec\n', build = '' } = {}) =>
     [

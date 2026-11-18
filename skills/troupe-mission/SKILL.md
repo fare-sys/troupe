@@ -1,6 +1,6 @@
 ---
 name: troupe-mission
-description: Run a multi-step task as a troupe mission with this session as the single workflow-agnostic orchestrator. You select or honor a referenced workflow (`troupe workflow list` / `troupe workflow show <name>`), draft `plan.md` mapping task roles to reusable duty roles (`troupe role list`) across that workflow's stages, pause at the workflow's human gates in the troupe panel, and orchestrate real agent windows (Claude Code, Codex, GitHub Copilot CLI, or JishuBuddy) in isolated git worktrees. Use whenever the person wants work split across agents or windows, names a troupe workflow, says "troupe", "mission", "run this as a mission", "split this into roles", "open the roles", "dispatch", "开几个 agent 并行做", or asks to plan, approve, execute, review, or land a mission under docs/missions/. Not for a small change one session should make directly.
+description: Run a multi-step task as a troupe mission with this session as the single workflow-agnostic orchestrator. You honor the workflow the person names, or otherwise pick a catalog workflow (`troupe workflow list` / `troupe workflow show <name>`) or design a mission workflow (`docs/missions/<m>/workflow.md`) sized to the work, draft `plan.md` mapping task roles to reusable duty roles (`troupe role list`) across that workflow's stages, pause at the workflow's human gates in the troupe panel, and orchestrate real agent windows (Claude Code, Codex, GitHub Copilot CLI, or JishuBuddy) in isolated git worktrees. Use whenever the person wants work split across agents or windows, names a troupe workflow, says "troupe", "mission", "run this as a mission", "split this into roles", "open the roles", "dispatch", "开几个 agent 并行做", or asks to plan, approve, execute, review, or land a mission under docs/missions/. Not for a small change one session should make directly.
 ---
 
 # Mission Orchestrator
@@ -74,17 +74,44 @@ attach line to the person if printed.
 2. Determine the workflow to reference:
    - If a mission already exists (`troupe status`), read its `workflow:` from
      `plan.md`.
-   - If the person named a workflow, use it; otherwise run `troupe workflow list`
-     and pick the workflow that fits the request (`delivery` by default for code
-     shipping, `design-first` when architecture sign-off comes first,
-     `investigation` for read-only analysis, `direct` for local branch delivery
-     without PR/push, or any custom workflow in `.troupe/workflows/` or
-     `~/.config/troupe/workflows/`).
-3. Run `troupe workflow show <workflow>`, `troupe role list` (plus
-   `troupe role show <duty>` when using custom duties), and
-   `troupe profile list`. **Treat the workflow's
-   stages, gates, teardown policy, and Markdown playbook as your execution
-   contract for the rest of the mission.**
+   - If the person named a workflow, use it exactly.
+   - Otherwise the workflow is yours to design for this request. Size it to
+     the work's complexity and risk using the available duties and profiles
+     (`troupe role list`, `troupe profile list`). Run `troupe workflow list`
+     first: when a catalog workflow (`delivery`, `design-first`, `direct`,
+     `investigation`, or a custom one in `.troupe/workflows/` or
+     `~/.config/troupe/workflows/`) already fits, reference it by name instead
+     of copying it. Otherwise author a mission workflow (see below).
+3. Run `troupe workflow show <workflow>` (for a mission workflow, read its
+   file), `troupe role list` (plus `troupe role show <duty>` when using custom
+   duties), and `troupe profile list`. **Treat the workflow's stages, gates,
+   teardown policy, and Markdown playbook as your execution contract for the
+   rest of the mission.**
+
+### Authoring a mission workflow
+
+A mission workflow is a workflow file for this mission alone:
+`docs/missions/<mission>/workflow.md`, next to `plan.md`, referenced from the
+plan with `workflow: ./workflow.md`. Start the mission with
+`troupe mission new <mission>` (the closest catalog workflow seeds the starter
+plan), then write the file and switch the plan's `workflow:`.
+
+- Use the same format as `troupe workflow show delivery`: YAML front matter
+  (`summary`, `stages`, optional `teardown`; omit `name`) and a non-empty
+  Markdown playbook body that tells you how to run each stage.
+- Keep the rules troupe enforces: the first gate is `gate: plan` with nothing
+  executing before it; every execution stage lists allowed `duties`; mark a
+  stage `required: true` only when the mission cannot finish without it; use
+  `skip_if_empty: <stage>` for a gate that only matters when its optional stage
+  has roles.
+- Add a gate wherever the person should decide before irreversible or costly
+  work (design sign-off, push, MR, merge); set `teardown.require_push` and
+  `require_merge` to match how the work lands.
+- Explain the shape in a short `## Workflow` section in `plan.md` (stages,
+  gates, and why this shape fits): the person approves the workflow together
+  with the plan at the `plan` gate.
+- Run `troupe check -m <mission>` until it is clean. The workflow file is part
+  of the approval hash: editing it after approval requires a new `plan` gate.
 
 Show the plan in the panel, not in chat: do not paste proposed role splits or
 open design questionnaires in chat asking for permission to write the plan. Put

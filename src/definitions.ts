@@ -10,14 +10,16 @@ import type { Yaml } from './yaml.ts'
 export const ENTITY_NAME = /^[a-z][a-z0-9-]*$/
 const SKILL_NAME = /^\S+$/
 
-export type DefinitionSource = 'built-in' | 'user' | 'repo'
+/** Where a definition came from; `mission` is a workflow authored for one mission next to its plan. */
+export type DefinitionSource = 'built-in' | 'user' | 'repo' | 'mission'
 export type DefinitionMeta = { path: string; source: DefinitionSource }
 
 /** Normalizes one repository root or `[mainRoot, worktreeRoot]` into a deduplicated list, dropping empties. */
 export const repoRootList = (root: string | readonly string[]): string[] =>
   typeof root === 'string' ? (root === '' ? [] : [root]) : [...new Set(root.filter(Boolean))]
 
-const isContainedPath = (dirReal: string, filePath: string): boolean => {
+/** Whether `filePath`, after resolving symlinks, stays inside the already-resolved directory `dirReal`. */
+export const isContainedPath = (dirReal: string, filePath: string): boolean => {
   const rel = relative(dirReal, realpathSync(filePath))
 
   return !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)

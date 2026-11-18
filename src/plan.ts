@@ -4,7 +4,7 @@ import { builtinDuties } from './duties.ts'
 import type { DutyRole } from './duties.ts'
 import type { Profile } from './profiles.ts'
 import { overlaps } from './touches.ts'
-import { builtinWorkflows, DEFAULT_WORKFLOW } from './workflows.ts'
+import { builtinWorkflows, DEFAULT_WORKFLOW, MISSION_WORKFLOW, MISSION_WORKFLOW_FILE } from './workflows.ts'
 import type { Workflow } from './workflows.ts'
 import { parseYaml } from './yaml.ts'
 import type { Yaml } from './yaml.ts'
@@ -182,12 +182,14 @@ export const readPlan = (
     problems.push(`troupe: ${text(data.troupe) || '?'} is not a format this troupe reads (2)`)
   }
   if (data.workflow !== undefined && typeof data.workflow !== 'string') {
-    problems.push('`workflow` must be a workflow name')
+    problems.push(`\`workflow\` must be a workflow name or ${MISSION_WORKFLOW}`)
   }
   const workflowName = text(data.workflow) || DEFAULT_WORKFLOW
   const workflow = workflows[workflowName]
-  if (workflow === undefined) {
-    problems.push(`unknown workflow "${workflowName}" (${Object.keys(workflows).sort().join(', ') || 'none'})`)
+  if (workflow === undefined && workflowName === MISSION_WORKFLOW) {
+    problems.push(`workflow ${MISSION_WORKFLOW}: no valid ${MISSION_WORKFLOW_FILE} next to plan.md`)
+  } else if (workflow === undefined) {
+    problems.push(`unknown workflow "${workflowName}" (${Object.keys(workflows).sort().join(', ') || 'none'}, or ${MISSION_WORKFLOW})`)
   }
 
   const profiles = isMap(data.profiles) ? data.profiles : {}

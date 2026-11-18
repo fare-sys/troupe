@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { ENTITY_NAME, readSkillList, repoRootList, scanDefinitionsDir } from './definitions.ts'
+import { ENTITY_NAME, isContainedPath, readSkillList, repoRootList, scanDefinitionsDir } from './definitions.ts'
 import type { DefinitionSource } from './definitions.ts'
 import { builtinDuties } from './duties.ts'
 import type { DutyRole } from './duties.ts'
@@ -13,6 +13,10 @@ import type { Yaml } from './yaml.ts'
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url))
 export const DEFAULT_WORKFLOW = 'delivery'
+/** The file, next to a mission's plan.md, holding a workflow authored for that mission alone. */
+export const MISSION_WORKFLOW_FILE = 'workflow.md'
+/** The plan's `workflow:` value that references the mission's own workflow file. */
+export const MISSION_WORKFLOW = `./${MISSION_WORKFLOW_FILE}`
 
 export type WorkflowStage = {
   id: string
@@ -272,17 +276,43 @@ export const loadWorkflows = (
     scanWorkflowsDir(join(repoRoot, '.troupe/workflows'), 'repo', workflows, problems)
   }
 
-  for (const workflow of Object.values(workflows)) {
-    for (const stage of workflow.stages) {
-      for (const duty of stage.duties) {
-        if (duties[duty] === undefined) {
-          problems.push(`${workflow.path}: workflow "${workflow.name}" stage "${stage.id}" references unknown duty "${duty}"`)
-        }
-      }
-    }
-  }
+  for (const workflow of Object.values(workflows)) problems.push(...unknownDutyProblems(workflow, duties))
 
   return { workflows, problems }
+}
+
+/** One problem per stage duty that `duties` does not define. */
+const unknownDutyProblems = (workflow: Workflow, duties: Record<string, DutyRole>): string[] =>
+  workflow.stages.flatMap(stage => stage.duties
+    .filter(duty => duties[duty] === undefined)
+    .map(duty => `${workflow.path}: workflow "${workflow.name}" stage "${stage.id}" references unknown duty "${duty}"`))
+
+/**
+ * Adds the mission's own workflow (`workflow.md` next to `planPath`) to `workflows` under
+ * {@link MISSION_WORKFLOW}, so a plan can reference it with `workflow: ./workflow.md`.
+ * The catalog is returned unchanged when the file is absent or invalid; `problems` explains
+ * why, and callers report them only when the plan references the mission workflow.
+ */
+export const withMissionWorkflow = (
+  planPath: string,
+  workflows: Record<string, Workflow>,
+  duties: Record<string, DutyRole> = builtinDuties(),
+): { workflows: Record<string, Workflow>; problems: string[] } => {
+  const dir = dirname(planPath)
+  const path = join(dir, MISSION_WORKFLOW_FILE)
+  if (!existsSync(path)) return { workflows, problems: [] }
+  try {
+    if (!isContainedPath(realpathSync(dir), path)) return { workflows, problems: [`${path}: line 1: path resolves outside ${dir}`] }
+    const parsed = readWorkflow(MISSION_WORKFLOW_FILE.slice(0, -3), readFileSync(path, 'utf8'), { path, source: 'mission' })
+    const workflow: Workflow = { ...parsed, name: MISSION_WORKFLOW }
+
+    return {
+      workflows: Object.assign(Object.create(null) as Record<string, Workflow>, workflows, { [MISSION_WORKFLOW]: workflow }),
+      problems: unknownDutyProblems(workflow, duties),
+    }
+  } catch (error) {
+    return { workflows, problems: [`${path}: ${(error as Error).message}`] }
+  }
 }
 
 /** Resolves the plan template path across repo `.troupe/templates`, user `~/.config/troupe/templates`, and package `templates`. */

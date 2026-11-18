@@ -10,7 +10,7 @@ import { loadProfiles } from './profiles.ts'
 import type { Plan } from './plan.ts'
 import { run } from './run.ts'
 import type { Run } from './run.ts'
-import { loadWorkflows } from './workflows.ts'
+import { loadWorkflows, MISSION_WORKFLOW, withMissionWorkflow } from './workflows.ts'
 
 // `troupe check [plan]`: finds the plan and prints its problems, or that it
 // is clean. Exit 0 clean, 1 with problems, 2 when there is no plan.
@@ -83,15 +83,17 @@ export const check = (
   const loadedDuties = loadDuties(roots, home, packageRoot)
   const loadedWorkflows = loadWorkflows(roots, home, packageRoot, loadedDuties.duties)
   const loadedProfiles = loadProfiles(roots, home, loadedDuties.duties)
+  const catalog = withMissionWorkflow(found.path, loadedWorkflows.workflows, loadedDuties.duties)
   const plan = readPlan(readFileSync(found.path, 'utf8'), loadedAgents.agents, {
     duties: loadedDuties.duties,
-    workflows: loadedWorkflows.workflows,
+    workflows: catalog.workflows,
     profiles: loadedProfiles.profiles,
   })
   const problems = [
     ...loadedAgents.problems,
     ...loadedDuties.problems,
     ...loadedWorkflows.problems,
+    ...(plan.workflow === MISSION_WORKFLOW ? catalog.problems : []),
     ...loadedProfiles.problems,
     ...plan.problems,
     ...textProblems(root, plan),
