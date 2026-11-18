@@ -12,6 +12,7 @@ import { fold, logPath, readLog } from './log.ts'
 import { callerPane } from './panes.ts'
 import { DEFAULT_WORKFLOW, readPlan } from './plan.ts'
 import { tmux } from './run.ts'
+import { loadProfiles } from './profiles.ts'
 import { planHash } from './state.ts'
 import { loadWorkflows, planTemplatePath } from './workflows.ts'
 import type { Workflow } from './workflows.ts'
@@ -158,16 +159,19 @@ export const mission = (r: Runtime, want = ''): Mission => {
   const loadedAgents = loadAgents(worktree, r.home)
   const loadedDuties = loadDuties(roots, r.home, r.packageRoot)
   const loadedWorkflows = loadWorkflows(roots, r.home, r.packageRoot, loadedDuties.duties)
+  const loadedProfiles = loadProfiles(roots, r.home, loadedDuties.duties)
   const source = readFileSync(path)
   const plan = readPlan(source.toString('utf8'), loadedAgents.agents, {
     duties: loadedDuties.duties,
     workflows: loadedWorkflows.workflows,
+    profiles: loadedProfiles.profiles,
   })
   const workflow = loadedWorkflows.workflows[plan.workflow]
   const problems = [
     ...loadedAgents.problems,
     ...loadedDuties.problems,
     ...loadedWorkflows.problems,
+    ...loadedProfiles.problems,
     ...plan.problems,
     ...textProblems(worktree, plan),
   ]
@@ -177,6 +181,9 @@ export const mission = (r: Runtime, want = ''): Mission => {
   ]
   for (const role of plan.roles) {
     hashRefs.push({ ref: `duty:${role.name}:${role.duty}`, bytes: loadedDuties.duties[role.duty]?.raw })
+    if (role.profile !== '') {
+      hashRefs.push({ ref: `profile:${role.name}:${role.profile}`, bytes: loadedProfiles.profiles[role.profile]?.raw })
+    }
     if (role.text !== '') {
       try {
         const text = roleText(worktree, role.text)
@@ -202,6 +209,7 @@ export const mission = (r: Runtime, want = ''): Mission => {
     plan,
     agents: loadedAgents.agents,
     duties: loadedDuties.duties,
+    profiles: loadedProfiles.profiles,
     workflow,
     problems,
     hash: planHash(source, hashRefs),

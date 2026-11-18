@@ -8,6 +8,7 @@ import { rootOf } from './check.ts'
 import type { DutyRole } from './duties.ts'
 import type { Folded, Logged } from './log.ts'
 import type { Plan } from './plan.ts'
+import type { Profile } from './profiles.ts'
 import { run, tmux } from './run.ts'
 import type { Ran, Run, RunOptions } from './run.ts'
 import { DEFAULT_STAGES, stagesOfWorkflow } from './stages.ts'
@@ -117,6 +118,8 @@ export type Mission = Repository & {
   plan: Plan
   agents: Record<string, Agent>
   duties: Record<string, DutyRole>
+  /** Shared profile library the plan resolved `use:` against. */
+  profiles: Record<string, Profile>
   workflow: Workflow | undefined
   problems: string[]
   hash: string

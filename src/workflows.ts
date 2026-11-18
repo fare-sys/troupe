@@ -1,9 +1,11 @@
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
-import { isAbsolute, join, relative } from 'node:path'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { builtinDuties, ENTITY_NAME } from './duties.ts'
-import type { DefinitionSource, DutyRole } from './duties.ts'
+import { ENTITY_NAME, readSkillList, repoRootList, scanDefinitionsDir } from './definitions.ts'
+import type { DefinitionSource } from './definitions.ts'
+import { builtinDuties } from './duties.ts'
+import type { DutyRole } from './duties.ts'
 import { PLAN_GATE } from './log.ts'
 import type { Folded } from './log.ts'
 import { parseFrontMatter, parseYaml, yamlLineOf } from './yaml.ts'
@@ -22,6 +24,8 @@ export type WorkflowStage = {
   duties: string[]
   /** Whether a plan using this workflow must schedule at least one task role in this stage. */
   required: boolean
+  /** Default skills every task role running in this stage is asked to load. */
+  skills: string[]
 }
 
 export type WorkflowTeardown = {
@@ -49,7 +53,7 @@ const isMap = (value: Yaml | undefined): value is YamlMap =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const WORKFLOW_KEYS = ['name', 'summary', 'stages', 'teardown'] as const
-const STAGE_KEYS = ['id', 'label', 'gate', 'next', 'duties', 'required'] as const
+const STAGE_KEYS = ['id', 'label', 'gate', 'next', 'duties', 'required', 'skills'] as const
 const TEARDOWN_KEYS = ['require_merge', 'require_push'] as const
 
 const readBool = (value: Yaml | undefined, fallback: boolean, fail: (why: string) => never): boolean => {
@@ -142,12 +146,17 @@ export const readWorkflow = (
     if (required && duties.length === 0) {
       return fail('stages', `stage ${id}: "required: true" requires nonempty "duties"`)
     }
+    const skills = readSkillList(entry.skills, why => fail('stages', `stage ${id}: skills ${why}`))
+    if (skills.length > 0 && duties.length === 0) {
+      return fail('stages', `stage ${id}: "skills" requires nonempty "duties" (only execution stages run task roles)`)
+    }
 
     return {
       id,
       label,
       duties,
       required,
+      skills,
       ...(gate !== undefined ? { gate } : {}),
       ...(next !== undefined ? { next } : {}),
     }
@@ -192,43 +201,12 @@ export const readWorkflow = (
   }
 }
 
-const isContainedPath = (dirReal: string, filePath: string): boolean => {
-  const rel = relative(dirReal, realpathSync(filePath))
-
-  return !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
-}
-
 const scanWorkflowsDir = (
   dir: string,
   source: DefinitionSource,
   into: Record<string, Workflow>,
   problems: string[],
-): void => {
-  let files: string[]
-  try {
-    files = readdirSync(dir).filter(file => file.endsWith('.md')).sort()
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      problems.push(`${dir}: line 1: ${(error as Error).message}`)
-    }
-    return
-  }
-  const bound = realpathSync(dir)
-  for (const file of files) {
-    const path = join(dir, file)
-    try {
-      if (!isContainedPath(bound, path)) {
-        problems.push(`${path}: line 1: path resolves outside ${dir}`)
-        continue
-      }
-      const name = file.slice(0, -3)
-      into[name] = readWorkflow(name, readFileSync(path, 'utf8'), { path, source })
-    } catch (error) {
-      const message = (error as Error).message
-      problems.push(`${path}: ${/^line \d+:/.test(message) ? message : `line 1: ${message}`}`)
-    }
-  }
-}
+): void => scanDefinitionsDir(dir, source, readWorkflow, into, problems)
 
 let cachedBuiltins: { workflows: Record<string, Workflow>; problems: string[] } | undefined
 
@@ -261,8 +239,7 @@ export const loadWorkflows = (
   const builtinBase = existsSync(join(packageRoot, 'workflows')) ? packageRoot : PACKAGE_ROOT
   scanWorkflowsDir(join(builtinBase, 'workflows'), 'built-in', workflows, problems)
   if (home !== '') scanWorkflowsDir(join(home, '.config/troupe/workflows'), 'user', workflows, problems)
-  const roots = typeof root === 'string' ? (root === '' ? [] : [root]) : [...new Set(root.filter(Boolean))]
-  for (const repoRoot of roots) {
+  for (const repoRoot of repoRootList(root)) {
     scanWorkflowsDir(join(repoRoot, '.troupe/workflows'), 'repo', workflows, problems)
   }
 
@@ -285,7 +262,7 @@ export const planTemplatePath = (
   home: string,
   packageRoot = PACKAGE_ROOT,
 ): string | undefined => {
-  const roots = typeof root === 'string' ? (root === '' ? [] : [root]) : [...new Set(root.filter(Boolean))].reverse()
+  const roots = repoRootList(root).reverse()
   const candidates = [
     ...roots.map(repoRoot => join(repoRoot, '.troupe/templates/plan.md')),
     ...(home !== '' ? [join(home, '.config/troupe/templates/plan.md')] : []),

@@ -2,6 +2,7 @@ import { AGENTS, unsetPermission } from './agents.ts'
 import type { Agent } from './agents.ts'
 import { builtinDuties } from './duties.ts'
 import type { DutyRole } from './duties.ts'
+import type { Profile } from './profiles.ts'
 import { overlaps } from './touches.ts'
 import { builtinWorkflows, DEFAULT_WORKFLOW } from './workflows.ts'
 import type { Workflow } from './workflows.ts'
@@ -34,6 +35,9 @@ export type Role = {
   text: string
   /** The `## Role: <name>` section's body, '' for none. */
   section: string
+  /** Shared library profile (`profiles/<name>.md`) the role uses, '' for none or a plan-local profile. */
+  profile: string
+  /** Stage defaults, then the profile's, then the role's own skills, deduplicated in that order. */
   skills: string[]
   reviews: string[]
   /** Stage group identifier used by the panel sidebar and STAGES counters. */
@@ -54,6 +58,8 @@ export type Plan = {
 export type PlanCatalog = {
   duties?: Record<string, DutyRole>
   workflows?: Record<string, Workflow>
+  /** Shared profile library; a plan's own `profiles:` entry of the same name takes precedence. */
+  profiles?: Record<string, Profile>
 }
 
 const NAME = /^[a-z][a-z0-9-]*$/
@@ -139,6 +145,7 @@ export const readPlan = (
 ): Plan => {
   const duties = catalog.duties ?? builtinDuties()
   const workflows = catalog.workflows ?? builtinWorkflows()
+  const library = catalog.profiles ?? {}
   const title = /^# +(.+)$/m.exec(source)?.[1]?.trim() ?? ''
   const sections = sectionsOf(source)
   const doneWhen = bullets(sections.find(section => /^done when$/i.test(section.heading))?.body ?? '')
@@ -206,9 +213,11 @@ export const readPlan = (
     if (!isMap(raw)) problems.push(`role ${name} is not a mapping`)
     for (const key of Object.keys(own)) if (!ROLE_KEYS.includes(key)) problems.push(`role ${name}: unknown key "${key}"`)
     const use = text(own.use)
-    const base = use === '' ? {} : profiles[use]
-    if (use !== '' && base === undefined) problems.push(`role ${name}: use names no profile "${use}"`)
-    const one: Map = { ...(isMap(base) ? base : {}), ...own }
+    const local = use !== '' && Object.hasOwn(profiles, use) ? profiles[use] : undefined
+    const shared = use !== '' && local === undefined && Object.hasOwn(library, use) ? library[use] : undefined
+    if (use !== '' && local === undefined && shared === undefined) problems.push(`role ${name}: use names no profile "${use}"`)
+    const base: Map = isMap(local) ? local : shared?.settings ?? {}
+    const one: Map = { ...base, ...own }
     const hasTouches = 'touches' in one
     if (!hasTouches) problems.push(`role ${name}: no touches (write touches: [] for a role that changes no files)`)
 
@@ -254,7 +263,14 @@ export const readPlan = (
       goal: text(one.goal),
       text: roleTextRef,
       section: roleSections.get(name) ?? '',
-      skills: texts(one.skills),
+      profile: shared?.name ?? '',
+      skills: [
+        ...new Set([
+          ...(workflow?.stages.find(stage => stage.id === resolvedStage)?.skills ?? []),
+          ...texts(base.skills),
+          ...texts(own.skills),
+        ]),
+      ],
       reviews,
       group: resolvedStage || (touches.length === 0 && reviews.length > 0 ? 'review' : 'build'),
     }

@@ -70,10 +70,29 @@ workflow（在 `plan.md` 中声明 `workflow: <name>`，或在 `mission new` / `
 - **内置职责角色**（[`roles/`](../roles/)）：`builder`、`reviewer`、`architect`、
   `researcher`、`tester`。每个职责角色由 YAML front matter（`name`、`summary`、
   `touches`、`startup`、`reviews`）与 Markdown 守则组成，并在启动简报中自动注入给对应任务角色。
+- **人设（profile，`profiles/<name>.md`）**：可复用的任务角色模板，放在
+  `~/.config/troupe/profiles/` 或 `<repo>/.troupe/profiles/`（`repo > user`）。
+  front matter 可预设 `summary`（必填）、`duty`、`agent`、`model`、`effort`、
+  `flags`、`skills`；任务专属字段（`touches`、`goal`、`reviews`、`depends_on`、
+  `stage`、`text`）会被拒绝。Markdown 正文以 `## Profile: <name>` 注入简报。
+  任务角色用 `use: <name>` 引用；plan 内同名的 `profiles:` 条目优先，任务角色自身字段覆盖预设。
+
+  ```markdown
+  ---
+  summary: UI designer who ships screens with visual sign-off
+  duty: builder
+  agent: claude
+  flags: [--permission-mode, acceptEdits]
+  skills: [fbw-frontend-product-design, fbw-frontend-engineering]
+  ---
+  Start from the states each screen must show; attach screenshots to your result.
+  ```
+- **Skills**：workflow 的执行阶段可声明 `skills: [...]`。任务角色简报列出阶段、人设、
+  角色自身 `skills` 的并集（按此顺序去重），并要求 agent 跳过未安装的 skill 并在结果中说明。
 - **三层覆盖与扩展**：可在 `<repo>/.troupe/workflows/<name>.md` 或
   `~/.config/troupe/workflows/<name>.md` 新增／覆盖 workflow，在
   `<repo>/.troupe/roles/<duty>.md` 或 `~/.config/troupe/roles/<duty>.md` 新增／覆盖职责角色
-  （优先级 `repo > user > built-in`）。修改被当前计划引用的 workflow 或职责角色文件会改变计划哈希，
+  （优先级 `repo > user > built-in`）。修改被当前计划引用的 workflow、职责角色或人设文件会改变计划哈希，
   继续派发前需要重新批准。
 
 ## 命令
@@ -89,6 +108,7 @@ mission 的 worktree 读计划，但不允许指定与当前 pane 所属不同�
 | `setup [--remove]` | 为找到的每个 harness 安装编排者 skill |
 | `workflow [list \| show <name>] [--json]` | 列出可用 workflow（`repo > user > built-in`）或查看单个 workflow 的阶段、关卡、收尾策略与编排说明 |
 | `role [list \| show <duty>] [--json]` | 列出可用职责角色（`repo > user > built-in`）或查看单个职责角色的契约与工作守则 |
+| `profile [list \| show <name>] [--json]` | 列出共享的任务角色人设（`repo > user`）或查看单个人设的预设与说明 |
 | `mission new <name> [-w <workflow>] [--base <ref>]` | 在 `mission/<name>` 上创建 mission 的 worktree 和针对 `<workflow>` 的初始计划，把当前 pane 绑定上去并打开面板 |
 | `open [--planning]` | 在当前 pane 旁边显示它的 mission 面板（每个 mission 一个）；没有 mission 时拒绝并列出打开的 mission，带 `--planning` 时则显示一个等待 `mission new` 的面板；在未绑定的 pane 里 `open -m <name>` 会让它成为该 mission 的编排者，前提是之前的编排者 pane 已经不在或已失效 |
 | `up -m <name> [-w <workflow>] [--orch claude\|codex\|copilot\|jishubuddy]` | 先 `mission new`，再在 mission worktree 中打开编排者和面板 |

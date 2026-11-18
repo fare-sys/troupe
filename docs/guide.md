@@ -54,7 +54,7 @@ stages); violations of a duty's `touches` (`required | optional | none`) or
 `depends_on` pointing forward in the workflow; an unknown agent; `flags` that
 do not pin the agent's permission (Claude Code: `--permission-mode`; Codex:
 `-a` and `-s`); a role with no `## Role: <name>` text; an unknown
-`depends_on`, `reviews`, `text` path or profile; a dependency cycle; or two
+`depends_on`, `reviews`, `text` path or profile (plan-local or shared); a dependency cycle; or two
 roles whose `touches` overlap without a `depends_on` between them. `model` and
 `effort` are passed as written.
 
@@ -73,11 +73,34 @@ drives any workflow by reference (`workflow: <name>` in `plan.md`, or
   `architect`, `researcher`, and `tester`. Each defines YAML front matter
   (`name`, `summary`, `touches`, `startup`, `reviews`) and Markdown rules
   injected into every assigned task role's launch brief.
+- **Profiles** (`profiles/<name>.md`): reusable task-role personas under
+  `~/.config/troupe/profiles/` or `<repo>/.troupe/profiles/` (`repo > user`).
+  Front matter presets `summary` (required), `duty`, `agent`, `model`,
+  `effort`, `flags`, and `skills`; mission-specific fields (`touches`, `goal`,
+  `reviews`, `depends_on`, `stage`, `text`) are refused. The Markdown body is
+  injected into the brief as `## Profile: <name>`. A role picks one with
+  `use: <name>`; a plan-local `profiles:` entry of the same name wins, and the
+  role's own fields override the preset.
+
+  ```markdown
+  ---
+  summary: UI designer who ships screens with visual sign-off
+  duty: builder
+  agent: claude
+  flags: [--permission-mode, acceptEdits]
+  skills: [fbw-frontend-product-design, fbw-frontend-engineering]
+  ---
+  Start from the states each screen must show; attach screenshots to your result.
+  ```
+- **Skills**: a workflow stage may declare `skills: [...]` (execution stages
+  only). A role's brief lists the union of its stage's, its profile's, and its
+  own `skills`, in that order, and tells the agent to continue without (and
+  report) any skill it does not have installed.
 - **3-tier customization**: add or override workflows under
   `<repo>/.troupe/workflows/<name>.md` or `~/.config/troupe/workflows/<name>.md`,
   and duty roles under `<repo>/.troupe/roles/<duty>.md` or
   `~/.config/troupe/roles/<duty>.md` (`repo > user > built-in`). Edits to the
-  active workflow or referenced duty files change the plan hash and require
+  active workflow, referenced duty files, or used shared profiles change the plan hash and require
   re-approval before further dispatches.
 
 ## Commands
@@ -95,6 +118,7 @@ on usage errors.
 | `setup [--remove]` | install the orchestrator skill for each harness found |
 | `workflow [list \| show <name>] [--json]` | list available workflows (`repo > user > built-in`) or inspect one workflow's stages, gates, teardown policy and playbook |
 | `role [list \| show <duty>] [--json]` | list available duty roles (`repo > user > built-in`) or inspect one duty role's contract and rules |
+| `profile [list \| show <name>] [--json]` | list shared task-role profiles (`repo > user`) or inspect one profile's presets and persona |
 | `mission new <name> [-w <workflow>] [--base <ref>]` | create the mission's worktree on `mission/<name>` with a starter `plan.md` for `<workflow>`, bind this pane to it and open its panel |
 | `open [--planning]` | show this pane's mission's panel beside it (one per mission); without a mission it refuses and lists the open ones, except with `--planning`, which shows a panel waiting for `mission new`; `open -m <name>` from an unbound pane makes it that mission's orchestrator, only once the previous orchestrator pane is gone or dead |
 | `up -m <name> [-w <workflow>] [--orch claude\|codex\|copilot\|jishubuddy]` | `mission new`, then open the orchestrator in the mission worktree and the panel |

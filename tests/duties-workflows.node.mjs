@@ -13,6 +13,8 @@ import { builtinDuties, loadDuties, readDuty } from '../dist/duties.js'
 import { append } from '../dist/log.js'
 import { mission } from '../dist/missions.js'
 import { readPlan } from '../dist/plan.js'
+import { loadProfiles, readProfile } from '../dist/profiles.js'
+import { briefOf } from '../dist/role-commands.js'
 import { afterGateApproval, builtinWorkflows, loadWorkflows, readWorkflow } from '../dist/workflows.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
@@ -636,3 +638,74 @@ test('hardening: linked mission worktrees inherit main .troupe definitions, syml
   assert.match(blockedDispatch.out, /cannot dispatch role api in stage build: gate design-ok is not approved yet/)
 })
 
+
+test('profiles: shared library presets, stage/profile/role skill union, brief persona, approval hash, and CLI', async t => {
+  // 1. A shared profile presets only reusable fields; mission-specific fields and nesting are refused.
+  assert.throws(() => readProfile('p', '---\nsummary: x\ntouches: [src/]\n---\n'), /line 3: touches is mission-specific/)
+  assert.throws(() => readProfile('p', '---\nsummary: x\nuse: other\n---\n'), /a profile cannot use another/)
+  assert.throws(() => readProfile('p', '---\nsummary: x\ncolor: red\n---\n'), /color is not a profile field/)
+  assert.throws(() => readProfile('p', '---\nsummary: x\nskills: [has space]\n---\n'), /invalid skill name/)
+
+  // 2. Stage skills are only valid on execution stages.
+  const stageYaml = extra => `---\nsummary: s\nstages:\n  - id: plan-ok\n    gate: plan\n${extra}  - id: build\n    duties: [builder]\n    skills: [stage-skill]\n---\nPlaybook.\n`
+  assert.throws(() => readWorkflow('w', stageYaml('    skills: [x]\n')), /"skills" requires nonempty "duties"/)
+  const workflow = readWorkflow('skilled', stageYaml(''))
+  assert.deepEqual(workflow.stages[1].skills, ['stage-skill'])
+
+  // 3. readPlan merges stage < profile < role skills; plan-local profiles shadow the library.
+  const designer = readProfile(
+    'frontend-designer',
+    '---\nsummary: UI designer\nduty: builder\nagent: claude\nflags: [--permission-mode, acceptEdits]\nskills: [design-skill, shared-skill]\n---\nThink in screens and states.\n',
+  )
+  const planOf = (profilesBlock, roleSkills) => [
+    '# Probe', '', '```yaml', 'troupe: 2', 'goal: g', 'workflow: skilled', 'base: main',
+    ...profilesBlock,
+    'roles:', '  ui:', '    use: frontend-designer', '    touches: [web/]', ...roleSkills, '```', '',
+    '## Role: ui', '', 'Build the screens.', '',
+  ].join('\n')
+  const catalog = { workflows: { skilled: workflow }, profiles: { 'frontend-designer': designer } }
+  const shared = readPlan(planOf([], ['    skills: [shared-skill, role-skill]']), AGENTS, catalog)
+  assert.deepEqual(shared.problems, [])
+  assert.equal(shared.roles[0].duty, 'builder')
+  assert.equal(shared.roles[0].profile, 'frontend-designer')
+  assert.deepEqual(shared.roles[0].skills, ['stage-skill', 'design-skill', 'shared-skill', 'role-skill'])
+  const local = readPlan(
+    planOf(['profiles:', '  frontend-designer:', '    duty: builder', '    agent: claude', '    flags: [--permission-mode, acceptEdits]'], []),
+    AGENTS,
+    catalog,
+  )
+  assert.deepEqual(local.problems, [])
+  assert.equal(local.roles[0].profile, '')
+  assert.deepEqual(local.roles[0].skills, ['stage-skill'])
+
+  // 4. A user-tier profile resolves through check, the CLI, the brief, and the approval hash.
+  const { root, home } = initGitRepo(t)
+  const profilePath = join(home, '.config/troupe/profiles/frontend-designer.md')
+  write(profilePath, designer.raw)
+  write(join(home, '.config/troupe/profiles/broken.md'), '---\nsummary: Broken\nduty: ghost\n---\n')
+  write(
+    join(root, 'docs/missions/ui/plan.md'),
+    ['# UI', '', '```yaml', 'troupe: 2', 'goal: Build UI', 'base: main', 'roles:',
+      '  ui:', '    use: frontend-designer', '    touches: [web/]', '```', '', '## Role: ui', '', 'Build the screens.', ''].join('\n'),
+  )
+  const r = runtime({ cwd: root, home, env: { LC_ALL: 'C', LANG: 'C' }, inputTTY: true, outputTTY: true, write: () => {}, ask: async () => 'y' })
+  const listed = JSON.parse((await execute('profile', ['list', '--json'], r)).out)
+  assert.deepEqual(listed.profiles.map(one => [one.name, one.source]), [['broken', 'user'], ['frontend-designer', 'user']])
+  assert.ok(listed.problems.some(p => p.includes('profile "broken" references unknown duty "ghost"')))
+  rmSync(join(home, '.config/troupe/profiles/broken.md'))
+  const shown = await execute('profile', ['show', 'frontend-designer'], r)
+  assert.equal(shown.code, 0)
+  assert.match(shown.out, /Presets: duty=builder · agent=claude · flags=--permission-mode, acceptEdits · skills=design-skill, shared-skill/)
+  assert.match(shown.out, /Think in screens and states\./)
+  assert.equal((await execute('profile', ['show', 'missing'], r)).code, 1)
+
+  const checked = await execute('check', ['ui'], r)
+  assert.equal(checked.code, 0, checked.out)
+  const m = mission(r, 'ui')
+  const brief = briefOf(m, m.plan.roles[0], '/wt', 'role/ui/ui')
+  assert.match(brief, /Skills to load: design-skill, shared-skill\./)
+  assert.match(brief, /If a listed skill is not installed for you, continue without it/)
+  assert.match(brief, /## Profile: frontend-designer\n\nThink in screens and states\./)
+  write(profilePath, designer.raw.replace('Think in screens', 'Think in flows'))
+  assert.notEqual(mission(r, 'ui').hash, m.hash)
+})

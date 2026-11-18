@@ -23,6 +23,7 @@ import { effectiveStageId, unapprovedGatesBefore } from './workflows.ts'
 
 export const briefOf = (m: Mission, role: Role, worktree: string, branch: string, lang: Lang = 'en'): string => {
   const duty = m.duties[role.duty]
+  const profile = role.profile === '' ? undefined : m.profiles[role.profile]
   const isStandby = duty !== undefined ? duty.startup === 'standby' : role.touches.length === 0 && role.reviews.length > 0
   const tracksDoneWhen = duty !== undefined ? duty.reviews !== 'forbidden' : isStandby
 
@@ -42,10 +43,16 @@ export const briefOf = (m: Mission, role: Role, worktree: string, branch: string
       ? `Change only these touches: ${role.touches.join(', ')}. Commit your changes on your branch.`
       : 'Change only these touches: none; do not change repository files or create commits.',
     ...(role.reviews.length > 0 ? [`Reviews: ${role.reviews.join(', ')}.`] : []),
-    ...(role.skills.length > 0 ? [`Skills to load: ${role.skills.join(', ')}.`] : []),
+    ...(role.skills.length > 0
+      ? [
+          `Skills to load: ${role.skills.join(', ')}.`,
+          'If a listed skill is not installed for you, continue without it and name it under open items in your result.',
+        ]
+      : []),
     '',
     ...(lang === 'zh' ? [WRITE_CHINESE_ROLE, ''] : []),
     ...(duty !== undefined ? [`## Duty: ${duty.name}`, '', duty.body, ''] : []),
+    ...(profile !== undefined && profile.body !== '' ? [`## Profile: ${profile.name}`, '', profile.body, ''] : []),
     ...(m.texts.has(role.name) ? ['## Referenced instructions', '', (m.texts.get(role.name) ?? '').trim(), ''] : []),
     ...(role.section ? ['## Your role', '', role.section, ''] : []),
     '## Finish', '',

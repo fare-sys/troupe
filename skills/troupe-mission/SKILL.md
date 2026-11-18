@@ -25,14 +25,20 @@ Four concepts stay strictly separate:
    defining `touches`, `reviews`, `startup` (`immediate` vs `standby`), and role
    rules. Inspect with `troupe role list` and `troupe role show <duty>`.
 4. **Task role (`roles.<name>` + `## Role: <name>`)**: a concrete mission window,
-   worktree, and branch assigned to one `duty` and one workflow `stage`.
+   worktree, and branch assigned to one `duty` and one workflow `stage`. You
+   define task roles in `plan.md`; the person approves them at the plan gate.
+
+A **profile** (`use: <name>`) is a reusable persona the person maintains for
+task roles: it presets `duty`, `agent`, `model`, `effort`, `flags`, `skills`,
+and persona instructions, but never mission-specific fields. Inspect the
+shared library with `troupe profile list` and `troupe profile show <name>`.
 
 ## Hard invariants
 
 The `troupe` CLI enforces correctness in code:
 - No task role opens unless `plan.md` — hashed together with the referenced
-  workflow definition, each role's duty definition, and any extra `text` files —
-  is approved at the `plan` gate.
+  workflow definition, each role's duty definition, each shared profile a role
+  uses, and any extra `text` files — is approved at the `plan` gate.
 - One task role is one git worktree, one branch, and one tmux pane; overlapping
   `touches` require `depends_on` ordering, and cross-stage `depends_on` must
   respect workflow stage order.
@@ -74,8 +80,9 @@ attach line to the person if printed.
      `investigation` for read-only analysis, `direct` for local branch delivery
      without PR/push, or any custom workflow in `.troupe/workflows/` or
      `~/.config/troupe/workflows/`).
-3. Run `troupe workflow show <workflow>` and `troupe role list` (plus
-   `troupe role show <duty>` when using custom duties). **Treat the workflow's
+3. Run `troupe workflow show <workflow>`, `troupe role list` (plus
+   `troupe role show <duty>` when using custom duties), and
+   `troupe profile list`. **Treat the workflow's
    stages, gates, teardown policy, and Markdown playbook as your execution
    contract for the rest of the mission.**
 
@@ -113,7 +120,15 @@ Edit `docs/missions/<mission>/plan.md` in the mission worktree by full path:
   - Cover every stage marked `required` in `troupe workflow show <workflow>`.
   - Respect each duty's contract (`touches=required | optional | none` and
     `reviews=required | optional | forbidden`).
-  - Assign each role's `agent` (`claude`, `codex`, `copilot`, `jishubuddy`, or
+  - Prefer `use: <profile>` from `troupe profile list` when a shared profile
+    fits the role (or when the person asked for it); add only the
+    mission-specific fields (`goal`, `touches`, `depends_on`, `reviews`,
+    `stage`) and any overrides. Use the plan's own `profiles:` only for
+    settings shared within this mission.
+  - Skills reach the brief as the union of the workflow stage's `skills`, the
+    profile's `skills`, and the role's own `skills:`; add a role-level skill
+    only when this assignment needs domain know-how the others lack.
+  - Otherwise assign each role's `agent` (`claude`, `codex`, `copilot`, `jishubuddy`, or
     `.troupe/agents/<name>.yaml`), `model`, `effort`, and permission-pinning
     `flags` (Claude Code: `--permission-mode acceptEdits`; Codex:
     `-a on-request -s workspace-write`; Copilot: `[--allow-tool=write]`;
@@ -140,8 +155,8 @@ troupe gate plan "<one-line summary>"
 In the panel, `a` approves and `c` returns `change: <words>`. On `change:`,
 update `plan.md` (switching `-w` / `workflow:` if requested), re-run
 `troupe check`, commit, and re-open `troupe gate plan`. Any later edit to
-`plan.md`, the referenced workflow file, or any referenced duty/`text` file
-requires re-approval before dispatching more roles.
+`plan.md`, the referenced workflow file, or any referenced duty, profile, or
+`text` file requires re-approval before dispatching more roles.
 
 ## 4. Execute the Referenced Workflow
 

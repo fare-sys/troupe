@@ -21,11 +21,13 @@ import { panel } from './panel.ts'
 import { recordOrchestrator } from './notices.ts'
 import { afterApproval, markOrchestrator } from './orchestrator.ts'
 import { createPanel, openPanel } from './panel-open.ts'
+import { loadProfiles } from './profiles.ts'
+import type { Profile } from './profiles.ts'
 import { loadWorkflows, unapprovedGatesBefore } from './workflows.ts'
 
 const OPTIONS: Record<string, string[]> = {
   setup: ['remove'], open: ['planning'], up: ['orch', 'workflow'], mission: ['base', 'workflow'], check: [],
-  workflow: ['json'], role: ['json'],
+  workflow: ['json'], role: ['json'], profile: ['json'],
   approve: [], gate: ['no-wait'], stage: [],
   dispatch: [], status: ['json', 'watch'], send: [], wait: ['role', 'gate', 'timeout', 'ready'], teardown: ['force'], close: ['all'], panel: ['once', 'plain', 'width', 'height', 'no-anim'],
 }
@@ -173,6 +175,7 @@ const workflowCommand = (r: Runtime, pos: string[], json: boolean): Reply => {
       ...(one.gate !== undefined ? [`gate: ${one.gate}`] : []),
       ...(one.duties.length > 0 ? [`duties: ${one.duties.join(', ')}`] : []),
       ...(one.required ? ['required'] : []),
+      ...(one.skills.length > 0 ? [`skills: ${one.skills.join(', ')}`] : []),
     ]
 
     return `  ${idx + 1}. ${one.id} (${one.label})${details.length > 0 ? ` · ${details.join(' · ')}` : ''}`
@@ -234,6 +237,58 @@ const roleCommand = (r: Runtime, pos: string[], json: boolean): Reply => {
       '',
       duty.body,
       ...loaded.problems,
+      '',
+    ].join('\n'),
+  }
+}
+
+/** Describes a profile's preset task-role fields on one line, e.g. `duty=builder · agent=codex · skills=a, b`. */
+const profilePresets = (profile: Pick<Profile, 'settings'>): string => {
+  const parts = Object.entries(profile.settings).map(([key, value]) =>
+    `${key}=${Array.isArray(value) ? value.join(', ') : String(value)}`)
+
+  return parts.length > 0 ? parts.join(' · ') : 'no presets'
+}
+
+const profileCommand = (r: Runtime, pos: string[], json: boolean): Reply => {
+  const usage = 'profile [list | show <name>] [--json]'
+  const action = pos[0] ?? 'list'
+  if (action !== 'list' && action !== 'show') throw new Usage(usage)
+  count(pos, action === 'show' ? 2 : 0, action === 'show' ? 2 : 1, usage)
+  const roots = repoRootsOf(r.cwd, r.run)
+  const loadedDuties = loadDuties(roots, r.home, r.packageRoot)
+  const loaded = loadProfiles(roots, r.home, loadedDuties.duties)
+  const problems = [...loadedDuties.problems, ...loaded.problems]
+  const code = problems.length > 0 ? 1 : 0
+
+  if (action === 'list') {
+    const items = Object.values(loaded.profiles)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(({ raw: _raw, ...rest }) => rest)
+    if (json) return { code, out: `${JSON.stringify({ profiles: items, problems })}\n` }
+    const lines = items.map(profile => `${profile.name} [${profile.source}] · ${profilePresets(profile)}\n  ${profile.summary}`)
+
+    return { code, out: `${[...lines, ...problems].join('\n') || 'No profiles found.'}\n` }
+  }
+
+  const targetName = id(pos[1], 'profile')
+  const profile = loaded.profiles[targetName]
+  if (profile === undefined) {
+    if (problems.length > 0) throw new Refusal(problems.join('\n'))
+    throw new Refusal(`unknown profile "${targetName}" (choose ${Object.keys(loaded.profiles).sort().join(', ') || 'none'})`)
+  }
+  const { raw: _raw, ...info } = profile
+  if (json) return { code, out: `${JSON.stringify({ profile: info, problems })}\n` }
+
+  return {
+    code,
+    out: [
+      `Profile: ${profile.name} (${profile.source})`,
+      `Summary: ${profile.summary}`,
+      `Presets: ${profilePresets(profile)}`,
+      '',
+      ...(profile.body !== '' ? [profile.body] : []),
+      ...problems,
       '',
     ].join('\n'),
   }
@@ -355,6 +410,7 @@ export const execute = async (command: string, args: string[], overrides: Partia
     }
     if (command === 'workflow') return workflowCommand(r, pos, !!values.json)
     if (command === 'role') return roleCommand(r, pos, !!values.json)
+    if (command === 'profile') return profileCommand(r, pos, !!values.json)
     if (command === 'mission') {
       if (pos[0] !== 'new') throw new Usage('mission new <name> [-w <workflow>] [--base <ref>]')
       count(pos, 2, 2, 'mission new <name> [-w <workflow>] [--base <ref>]')

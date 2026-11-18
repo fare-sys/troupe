@@ -34,7 +34,7 @@ goal: "<the mission in one sentence: what it delivers>"
 why: "<one line: why now>"
 workflow: delivery
 base: mission/<mission>         # roles are cut from it at dispatch; you merge onto it
-profiles:                       # settings several roles share; a role's own fields win
+profiles:                       # plan-local presets; shared ones: troupe profile list
   claude-build:
     duty: builder               # duty role (roles/<duty>.md); stage resolves from workflow
     agent: claude
@@ -73,7 +73,10 @@ Each task role resolves its `duty` (`builder`, `reviewer`, `architect`,
 `researcher`, `tester`, or a custom duty in `.troupe/roles/`), optional
 `stage` (auto-inferred when the duty appears in only one stage of `workflow`),
 `agent` (`claude`, `codex`, `copilot`, `jishubuddy`, or an adapter in
-`.troupe/agents/`), and `flags` (directly or via `use:` from `profiles`).
+`.troupe/agents/`), and `flags` (directly or via `use:` from `profiles`, or
+from a shared profile in `~/.config/troupe/profiles/` or
+`.troupe/profiles/`; a plan-local profile of the same name wins). A role's
+`skills` are the union of its workflow stage's, its profile's, and its own.
 `flags` must explicitly pin the agent's permission rather than relying on CLI
 defaults (Claude Code: `--permission-mode`; Codex: `-a` and `-s`; Copilot:
 `--allow-tool`; JishuBuddy: `--approval`). Keep each value on one line. If a

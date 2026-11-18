@@ -123,8 +123,9 @@ Orchestration, duty roles, task roles, and workflows are cleanly separated:
 - **One orchestrator** ([`skills/troupe-mission/SKILL.md`](skills/troupe-mission/SKILL.md)) stays workflow-agnostic and follows whichever workflow a mission references (`troupe up -m <mission> -w <workflow>` or `workflow: <name>` in `plan.md`).
 - **Workflows** ([`workflows/`](workflows/)) arrange stages, allowed duty roles, human gates, and teardown policies (`delivery`, `design-first`, `investigation`, `direct`). Inspect them with `troupe workflow list` / `troupe workflow show <name>`, or add your own under `.troupe/workflows/<name>.md` or `~/.config/troupe/workflows/<name>.md`.
 - **Duty roles** ([`roles/`](roles/)) define reusable contracts (`builder`, `reviewer`, `architect`, `researcher`, `tester`), while **task roles** in `plan.md` bind each concrete window/worktree to a `duty` and workflow `stage`. Inspect duties with `troupe role list` / `troupe role show <duty>`, or customize them under `.troupe/roles/<duty>.md` or `~/.config/troupe/roles/<duty>.md`.
+- **Profiles** are reusable personas for task roles (for example a "frontend designer" = `builder` + design skills + a persona note). Keep them under `~/.config/troupe/profiles/<name>.md` or `.troupe/profiles/<name>.md`, inspect them with `troupe profile list` / `troupe profile show <name>`, and the orchestrator references them with `use: <name>`. Workflow stages can also declare default `skills`; a role's brief asks it to load the union of stage, profile, and role skills.
 
-The CLI checks plan approval (hashed across `plan.md`, workflow, and duty definitions), stage gates, active stage dispatch boundaries, role dependencies, declared file overlaps, and agent permissions.
+The CLI checks plan approval (hashed across `plan.md`, workflow, duty, and used profile definitions), stage gates, active stage dispatch boundaries, role dependencies, declared file overlaps, and agent permissions.
 
 Multiple missions can run in the same repository or across repositories. Each gets its own mission branch and worktree; your original checkout stays on its branch.
 

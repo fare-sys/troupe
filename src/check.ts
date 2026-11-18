@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { loadAgents } from './agents.ts'
 import { loadDuties } from './duties.ts'
 import { readPlan } from './plan.ts'
+import { loadProfiles } from './profiles.ts'
 import type { Plan } from './plan.ts'
 import { run } from './run.ts'
 import type { Run } from './run.ts'
@@ -66,7 +67,7 @@ export const findPlan = (root: string, cwd: string, want: string): { path: strin
   return path === undefined ? { missing: `no plan at ${want} (a plan file, a folder holding plan.md, or a mission under ${MISSIONS}/)` } : { path }
 }
 
-/** Checks the plan `want` names; its agents, duties, workflows, and role texts are read from the worktree holding it. */
+/** Checks the plan `want` names; its agents, duties, workflows, profiles, and role texts are read from the worktree holding it. */
 export const check = (
   cwd: string,
   want: string,
@@ -81,14 +82,17 @@ export const check = (
   const loadedAgents = loadAgents(root, home)
   const loadedDuties = loadDuties(roots, home, packageRoot)
   const loadedWorkflows = loadWorkflows(roots, home, packageRoot, loadedDuties.duties)
+  const loadedProfiles = loadProfiles(roots, home, loadedDuties.duties)
   const plan = readPlan(readFileSync(found.path, 'utf8'), loadedAgents.agents, {
     duties: loadedDuties.duties,
     workflows: loadedWorkflows.workflows,
+    profiles: loadedProfiles.profiles,
   })
   const problems = [
     ...loadedAgents.problems,
     ...loadedDuties.problems,
     ...loadedWorkflows.problems,
+    ...loadedProfiles.problems,
     ...plan.problems,
     ...textProblems(root, plan),
   ]
