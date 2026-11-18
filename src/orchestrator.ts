@@ -7,11 +7,12 @@ import { fold, orchestratorOf, readLog } from './log.ts'
 import type { Logged } from './log.ts'
 import { markedPanes, markMission, orchestratorsOf, unbind } from './missions.ts'
 import { tmux } from './run.ts'
+import { afterGateApproval } from './workflows.ts'
+import type { Workflow } from './workflows.ts'
 
-export const afterMrApproval = (mission: string): string => `Open the PR, then run troupe stage merged -m ${mission} and troupe gate merged -m ${mission} "<the PR link>". Keep the role windows: the person may ask for changes before merging.`
-export const afterMerged = (mission: string): string => `Run troupe stage teardown -m ${mission} and troupe teardown -m ${mission}, then report the cleanup.`
-/** What the orchestrator does after an approved gate; the gates past the plan carry their next step. */
-export const afterApproval = (gate: string, mission: string): string => gate === 'mr-ok' ? afterMrApproval(mission) : gate === 'merged' ? afterMerged(mission) : 'Continue the mission.'
+/** What the orchestrator does after an approved gate, read from the active workflow's stage metadata. */
+export const afterApproval = (workflow: Workflow | undefined, gate: string, mission: string): string =>
+  afterGateApproval(workflow, gate, mission)
 
 type Target = { pane: string; token: string }
 type Notice = { gate: string; at: string; text: string; target: Target }
@@ -39,7 +40,7 @@ export const queueAnswer = (r: Runtime, m: Mission, answer: Logged): void => {
   if (found.length !== 1) return
   const queue = pending.get(r) ?? new Map<string, Notice>()
   queue.set(`${m.log}\0${answer.gate}`, { gate: answer.gate, at: answer.at, target: found[0]!,
-    text: (answer.answer === 'approve' ? `${answer.gate} approved in the panel. ${afterApproval(answer.gate, m.name)}` : `Change requested on ${answer.gate}: ${answer.text ?? ''}`).replace(/\s+/g, ' ').trim() })
+    text: (answer.answer === 'approve' ? `${answer.gate} approved in the panel. ${afterApproval(m.workflow, answer.gate, m.name)}` : `Change requested on ${answer.gate}: ${answer.text ?? ''}`).replace(/\s+/g, ' ').trim() })
   pending.set(r, queue)
   flushAnswers(r, m)
 }

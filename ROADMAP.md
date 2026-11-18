@@ -12,16 +12,23 @@ any terminal agent with an adapter.
 **What the product is.** Plan first, then roles: the orchestrator and the
 person agree on `plan.md`, the person approves it in the panel, and only
 then do role windows open. The persistent, interactive panel is part of the
-product. What troupe is not: a port of one person's workflow. The default
-workflow is one recipe in a skill; a user who wants another changes the
-skill (its text and its `stages.yaml`), not the code.
+product. What troupe is not: a port of one person's workflow. One
+workflow-agnostic orchestrator skill executes whichever workflow a mission
+references (`workflows/<name>.md` or `.troupe/workflows/<name>.md`), scheduling
+reusable duty roles (`roles/<duty>.md` or `.troupe/roles/<duty>.md`) across its
+stages without changing the orchestrator or CLI code.
 
 **The rule that draws the line.** Code enforces only what keeps the work
-correct; the method lives in the skill, as text, and can be swapped.
+correct; workflows and duty roles live in standalone Markdown definitions and
+are selected by reference.
 
 Enforced in code:
-- No role window before the plan, hashed as it is now with the role texts it
-  references, is approved; approval lives in the run log.
+- No role window before the plan, hashed as it is now with the workflow, duty
+  definitions, and extra role texts it references, is approved; approval lives
+  in the run log.
+- Stage gates and dispatch boundaries: `stage` cannot skip past an unapproved
+  gate, and `dispatch` opens only task roles assigned to the active workflow
+  stage.
 - One role, one git worktree, one branch, one pane; overlapping `touches`
   need `depends_on`.
 - Each role's `flags` pin its agent's permission; it is never inherited.
@@ -41,20 +48,23 @@ or a timing guess is a symptom: find the signal that would have made it
 impossible, and fix that. The same holds for waiting: troupe pushes an event
 to whoever waits on it; nobody polls on a timer.
 
-In the default skill (`troupe-mission`), replaceable: brief → plan → plan
-gate → build → review per branch as it lands, one fix round sent to the same
-window → merge onto the mission branch → MR gate. A stricter recipe
-(`troupe-mission-strict`: slim, cross-role final review, two-round cap) may
-come later as a separate optional workflow.
+Built-in workflows (`delivery` by default, plus `design-first`,
+`investigation`, and `direct`) live in `workflows/*.md`, while reusable duty
+roles (`builder`, `reviewer`, `architect`, `researcher`, `tester`) live in
+`roles/*.md`; either can be overridden or extended under
+`~/.config/troupe/` or `<repo>/.troupe/`.
 
 **Architecture.**
 
 ```
-troupe            CLI: setup / up / panel / check / approve / gate / stage /
-                  dispatch / status / send / wait / close; a refusal exits 1
-                  with the reason, which any harness's model reads
+troupe            CLI: setup / up / workflow / role / panel / check / approve /
+                  gate / stage / dispatch / status / send / wait / close; a
+                  refusal exits 1 with the reason, which any harness's model reads
 troupe panel      the persistent TUI in window 0 beside the orchestrator
-skills/           the workflow: SKILL.md, stages.yaml, roles/, templates/
+skills/           the single workflow-agnostic orchestrator skill (SKILL.md)
+workflows/        referenced workflows: stages, gates, allowed duties, playbook
+roles/            reusable duty roles: touches/reviews/startup rules + instructions
+templates/        starter plan.md template
 agents            one adapter per harness: start command with a first prompt,
                   model and effort flags, permission flags, screen patterns
 ```

@@ -14,7 +14,8 @@ import { decisionsOf, modelOf } from '../dist/model.js'
 import { readPlan } from '../dist/plan.js'
 import { AGENTS } from '../dist/agents.js'
 import { hitAt, transition } from '../dist/panel-input.js'
-import { DEFAULT_STAGES, readStages } from '../dist/stages.js'
+import { DEFAULT_STAGES, readStages, stagesOfWorkflow } from '../dist/stages.js'
+import { builtinWorkflows } from '../dist/workflows.js'
 import { parseDiff } from '../dist/diff.js'
 
 const here = path => fileURLToPath(new URL(path, import.meta.url))
@@ -90,9 +91,8 @@ test('stages: done with the answer time, now, groups counted, gates ahead', () =
     m.stages.map(stage => `${stage.mark} ${stage.label} ${stage.note}`.trim()),
     ['done Plan', 'done Plan OK? 10:42', 'now Build 0/3', 'todo Review 0/1', 'gate MR OK?', 'todo Open MR', 'gate Merged?', 'todo Teardown'],
   )
-  const read = readStages(readFileSync(here('../skills/troupe-mission/stages.yaml'), 'utf8'))
-  assert.deepEqual(read.problems, [])
-  assert.deepEqual(read.stages, DEFAULT_STAGES)
+  const delivery = builtinWorkflows().delivery
+  assert.deepEqual(stagesOfWorkflow(delivery), DEFAULT_STAGES)
   assert.deepEqual(readStages('stages:\n  - id: a\n  - id: a\n').problems, ['duplicate stage id: a', 'the first gate must be `gate: plan`: dispatch waits for it'])
 })
 

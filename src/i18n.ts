@@ -45,9 +45,11 @@ const ZH = {
   // Role states
   'planned': '待启动', 'working': '工作中', 'idle': '空闲', 'waits on you': '等你处理', 'done': '完成', 'blocked': '受阻',
   'failed': '失败', 'gone': '已消失', 'closed': '已关闭', 'unknown': '未知',
-  // Stages of the default workflow
+  // Stages of built-in workflows
   'Plan': '计划', 'Plan OK?': '计划可以吗？', 'Build': '构建', 'Review': '审查', 'MR OK?': 'MR 可以吗？', 'Open MR': '开 MR',
   'Merged?': '已合并？', 'Teardown': '清理',
+  'Design': '设计', 'Design OK?': '设计可以吗？', 'Explore': '探索', 'Synthesize': '综合', 'Report OK?': '报告可以吗？',
+  'Verify': '验证', 'Integrate': '集成', 'Accept?': '验收通过吗？',
   // Roles and their fields
   'after {0}': '{0} 之后', 'as each lands': '随到随审', 'starts at once': '立即开始', 'at once': '立即', 'default': '默认',
   'orchestrator': '编排者', 'reviews {0} as each lands': '审查 {0}，随到随审', 'changes nothing': '不改任何文件',

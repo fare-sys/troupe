@@ -10,21 +10,21 @@ import { fileURLToPath } from 'node:url'
 import { findPlan } from '../dist/check.js'
 import { readPlan, sectionsOf, treeOf } from '../dist/plan.js'
 
-const TEMPLATE = fileURLToPath(new URL('../skills/troupe-mission/templates/plan.md', import.meta.url))
+const TEMPLATE = fileURLToPath(new URL('../templates/plan.md', import.meta.url))
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url))
 
 /** A plan around `yaml`, with a section for each name in `sections`. */
 const plan = (yaml, sections = []) =>
   ['# m: a mission', '', '## Done when', '', '- one', '- two', '', '```yaml', yaml.trim(), '```', '', ...sections.flatMap(name => [`## Role: ${name}`, '', `Do ${name}.`, ''])].join('\n')
 
-const CLAUDE = 'agent: claude\n    flags: [--permission-mode, acceptEdits]'
-const CODEX = 'agent: codex\n    flags: [-a, on-request, -s, workspace-write]'
+const CLAUDE = 'duty: builder\n    agent: claude\n    flags: [--permission-mode, acceptEdits]'
+const CODEX = 'duty: builder\n    agent: codex\n    flags: [-a, on-request, -s, workspace-write]'
 
 test('the template is a clean plan', () => {
   const read = readPlan(readFileSync(TEMPLATE, 'utf8'))
   assert.deepEqual(read.problems, [])
   assert.deepEqual(read.roles.map(role => role.name), ['api', 'web', 'review'])
-  assert.equal(read.workflow, 'troupe-mission')
+  assert.equal(read.workflow, 'delivery')
   assert.equal(read.base, 'mission/<mission>')
   assert.deepEqual(read.doneWhen.length, 2)
 })
@@ -35,6 +35,7 @@ test('a role starts from its profile and its own fields win', () => {
       `
 profiles:
   build:
+    duty: builder
     agent: claude
     model: opus
     effort: high
@@ -50,6 +51,8 @@ roles:
   )
   assert.deepEqual(read.problems, [])
   const [web] = read.roles
+  assert.equal(web.duty, 'builder')
+  assert.equal(web.stage, 'build')
   assert.equal(web.agent, 'claude')
   assert.equal(web.model, 'sonnet')
   assert.equal(web.effort, 'high')
@@ -64,17 +67,21 @@ test('flags must pin the permission; the account default is never inherited', ()
       `
 roles:
   a:
+    duty: builder
     agent: claude
     touches: [a/]
   b:
+    duty: builder
     agent: codex
     flags: [-a, never]
     touches: [b/]
   c:
+    duty: builder
     agent: claude
     flags: [--permission-mode=auto]
     touches: [c/]
   d:
+    duty: builder
     agent: codex
     flags: [--dangerously-bypass-approvals-and-sandbox]
     touches: [d/]
@@ -97,12 +104,15 @@ roles:
     ${CLAUDE}
     touches: [web/]
   x:
+    duty: tester
     agent: gemini
     touches: []
   y:
     ${CODEX}
   z:
-    ${CLAUDE}
+    duty: tester
+    agent: claude
+    flags: [--permission-mode, acceptEdits]
     use: nope
     touches: []
     colour: red
@@ -133,12 +143,16 @@ roles:
     ${CLAUDE}
     touches: [src/x.ts]
   c:
-    ${CLAUDE}
+    duty: tester
+    agent: claude
+    flags: [--permission-mode, acceptEdits]
     touches: []
     depends_on: [d, ghost]
     reviews: [nobody]
   d:
-    ${CLAUDE}
+    duty: tester
+    agent: claude
+    flags: [--permission-mode, acceptEdits]
     touches: []
     depends_on: [c]
 `,
@@ -155,7 +169,7 @@ roles:
 })
 
 test('a reviewer that changes nothing is grouped under review', () => {
-  const read = readPlan(plan(`roles:\n  a:\n    ${CLAUDE}\n    touches: [a/]\n  r:\n    ${CLAUDE}\n    touches: []\n    reviews: [a]`, ['a', 'r']))
+  const read = readPlan(plan(`roles:\n  a:\n    ${CLAUDE}\n    touches: [a/]\n  r:\n    duty: reviewer\n    agent: claude\n    flags: [--permission-mode, acceptEdits]\n    touches: []\n    reviews: [a]`, ['a', 'r']))
   assert.deepEqual(read.roles.map(role => role.group), ['build', 'review'])
 })
 
@@ -196,8 +210,8 @@ test('troupe check: clean, problems, and no plan', () => {
   execFileSync('git', ['switch', '-qc', 'mission/m1'], { cwd: repo })
   const clean = run()
   assert.equal(clean.status, 0, clean.stdout)
-  assert.match(clean.stdout, /clean \(3 roles: api, web, review\)/)
-  writeFileSync(join(repo, 'bad.md'), plan(`roles:\n  a:\n    agent: claude\n    touches: []\n    text: docs/a.md`))
+  assert.match(clean.stdout, /clean \(workflow delivery; 3 roles: api\[builder@build\], web\[builder@build\], review\[reviewer@review\]\)/)
+  writeFileSync(join(repo, 'bad.md'), plan(`roles:\n  a:\n    duty: tester\n    agent: claude\n    touches: []\n    text: docs/a.md`))
   const bad = run('bad.md')
   assert.equal(bad.status, 1)
   assert.match(bad.stdout, /bad\.md: 2 problems/)

@@ -1,13 +1,22 @@
 import { PLAN_GATE } from './log.ts'
+import type { Workflow } from './workflows.ts'
 import { parseYaml } from './yaml.ts'
 import type { Yaml } from './yaml.ts'
 
-// A workflow's stages.yaml: the list the panel draws as STAGES. A stage
-// with `gate:` waits for the person at that gate; the plan gate comes first.
+// Stages projected for the panel's STAGES column (`id`, `label`, optional `gate`).
+// Workflows own stage definitions; `stagesOfWorkflow` projects them for `modelOf`.
 
 export type Stage = { id: string; label: string; gate?: string }
 
-/** The stages of the default workflow, when its stages.yaml cannot be found. */
+/** Projects a workflow's stage definitions into panel Stage descriptors. */
+export const stagesOfWorkflow = (workflow: Workflow): Stage[] =>
+  workflow.stages.map(stage => ({
+    id: stage.id,
+    label: stage.label,
+    ...(stage.gate === undefined ? {} : { gate: stage.gate }),
+  }))
+
+/** The stages of the default `delivery` workflow, used as a fallback when no workflow resolves. */
 export const DEFAULT_STAGES: Stage[] = [
   { id: 'plan', label: 'Plan' },
   { id: 'plan-ok', label: 'Plan OK?', gate: PLAN_GATE },

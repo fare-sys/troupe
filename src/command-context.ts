@@ -5,11 +5,14 @@ import { fileURLToPath } from 'node:url'
 
 import type { Agent } from './agents.ts'
 import { rootOf } from './check.ts'
+import type { DutyRole } from './duties.ts'
 import type { Folded, Logged } from './log.ts'
 import type { Plan } from './plan.ts'
 import { run, tmux } from './run.ts'
 import type { Ran, Run, RunOptions } from './run.ts'
-import { DEFAULT_STAGES, readStages } from './stages.ts'
+import { DEFAULT_STAGES, stagesOfWorkflow } from './stages.ts'
+import type { Stage } from './stages.ts'
+import type { Workflow } from './workflows.ts'
 
 export type Reply = { out: string; code: number }
 export class Refusal extends Error {}
@@ -95,34 +98,33 @@ export const within = (root: string, ref: string): string => {
   return path
 }
 
-export const workflowDirs = (r: Runtime, name: string): string[] => {
-  if (!NAME.test(name)) throw new Refusal(`invalid workflow name: ${name}`)
+export const stagesOf = (m: Pick<Mission, 'workflow'>): Stage[] =>
+  m.workflow === undefined ? DEFAULT_STAGES : stagesOfWorkflow(m.workflow)
 
-  return [join(r.home, '.claude/skills', name), join(r.home, '.agents/skills', name),
-    join(r.env.COPILOT_HOME || join(r.home, '.copilot'), 'skills', name), join(r.packageRoot, 'skills', name)]
-}
-
-export const workflowStages = (r: Runtime, name: string) => {
-  const path = workflowDirs(r, name).map(dir => join(dir, 'stages.yaml')).find(path => existsSync(path))
-
-  return path === undefined ? { stages: DEFAULT_STAGES, problems: [] } : readStages(readFileSync(path, 'utf8'))
-}
-
-export const roleText = (r: Runtime, root: string, workflow: string, ref: string): { ref: string; bytes: string | undefined } => {
+export const roleText = (root: string, ref: string): { ref: string; bytes: string | undefined } => {
   if (ref === '') return { ref, bytes: undefined }
-  let path: string
-  if (ref.startsWith('workflow:')) {
-    const name = ref.slice('workflow:'.length)
-    const dir = workflowDirs(r, workflow).find(dir => existsSync(join(dir, 'SKILL.md'))) ?? join(r.packageRoot, 'skills', workflow)
-    const file = name.endsWith('.md') ? name : `${name}.md`
-    path = within(dir, `roles/${file}`)
-  } else path = within(root, ref)
+  const path = within(root, ref)
 
   return { ref, bytes: existsSync(path) ? readFileSync(path, 'utf8') : undefined }
 }
 
-/** `worktree` holds the plan, the agents and the role texts; `root` stays the main checkout. */
-export type Mission = Repository & { name: string; worktree: string; path: string; source: string; plan: Plan; agents: Record<string, Agent>; problems: string[]; hash: string; log: string; events: Logged[]; folded: Folded; texts: Map<string, string> }
+/** `worktree` holds the plan, the agents, the duties/workflows, and the role texts; `root` stays the main checkout. */
+export type Mission = Repository & {
+  name: string
+  worktree: string
+  path: string
+  source: string
+  plan: Plan
+  agents: Record<string, Agent>
+  duties: Record<string, DutyRole>
+  workflow: Workflow | undefined
+  problems: string[]
+  hash: string
+  log: string
+  events: Logged[]
+  folded: Folded
+  texts: Map<string, string>
+}
 
 export const clean = (m: Mission): void => {
   if (m.problems.length > 0) throw new Refusal(m.problems.join('\n'))

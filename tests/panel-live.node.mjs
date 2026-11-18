@@ -18,7 +18,7 @@ import { gateTarget, hitAt, initialUi, parseInput, transition } from '../dist/pa
 import { readPanel } from '../dist/panel-model.js'
 import { ENTER_PANEL, frameOf, LEAVE_PANEL, panel, terminalFrame } from '../dist/panel.js'
 
-const PLAN = '# A mission\n\n```yaml\ngoal: Build the endpoint\nwhy: People need it\nroles:\n  api:\n    agent: fake\n    flags: [--policy, ask]\n    touches: [src/]\n  web:\n    agent: fake\n    flags: [--policy, ask]\n    touches: [web/]\n```\n\n## Done when\n\n- It works.\n\n## Role: api\n\nBuild it.\n\n## Role: web\n\nUse it.\n'
+const PLAN = '# A mission\n\n```yaml\ntroupe: 2\ngoal: Build the endpoint\nwhy: People need it\nroles:\n  api:\n    duty: builder\n    agent: fake\n    flags: [--policy, ask]\n    touches: [src/]\n  web:\n    duty: builder\n    agent: fake\n    flags: [--policy, ask]\n    touches: [web/]\n```\n\n## Done when\n\n- It works.\n\n## Role: api\n\nBuild it.\n\n## Role: web\n\nUse it.\n'
 const ADAPTER = `command: fake
 model: []
 effort: []
@@ -164,7 +164,10 @@ test('live model shares the command hash/stages and captures screen, waitsOn, wo
   assert.equal(reading.model.roles[0].waitsOn, 'WAIT for permission')
   assert.ok(reading.model.roles[0].screen.includes('READY'))
   assert.deepEqual(reading.model.roles[0].work.changed, ['src/api.ts'])
-  w.write(join(w.r.home, '.agents/skills/troupe-mission/stages.yaml'), 'stages:\n  - id: plan-ok\n    gate: plan\n    label: My gate\n  - id: custom\n')
+  w.write(
+    join(w.r.home, '.config/troupe/workflows/delivery.md'),
+    '---\nname: delivery\nsummary: Custom delivery\nstages:\n  - id: plan-ok\n    gate: plan\n    label: My gate\n  - id: custom\n    label: Custom\n    duties: [builder]\n    required: true\n---\nPlaybook.\n',
+  )
   assert.equal(w.read().model.stages[1].id, 'custom')
   w.write(join(w.root, '.troupe/worktrees/m1/api/.troupe/result.md'), '---\nstatus: done\nsummary: All checked\n---\nDone body.')
   reading = w.read()
@@ -382,7 +385,12 @@ test('CLI panel --once --plain shows the plan gate, then the build after approva
   const m = mission(r, 'm1')
   append(m.log, 'orch', { ev: 'gate-open', gate: 'plan', plan: m.hash })
   const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url))
-  const run = (...args) => spawnSync(process.execPath, [cli, 'panel', '-m', 'm1', '--plain', '--width', '96', '--height', '58', ...args], { cwd: root, encoding: 'utf8', input: 'a' })
+  const run = (...args) => spawnSync(process.execPath, [cli, 'panel', '-m', 'm1', '--plain', '--width', '96', '--height', '58', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    input: 'a',
+    env: { ...process.env, HOME: join(root, 'home'), LC_ALL: 'C', LANG: 'C' },
+  })
   const before = run('--once')
   assert.equal(before.status, 0, before.stderr)
   assert.match(before.stdout, /APPROVE THE PLAN/)

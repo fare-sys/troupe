@@ -1,182 +1,200 @@
 ---
 name: troupe-mission
-description: Run a multi-step software change as a troupe mission, with this session as the orchestrator. You write a plan with the person, they approve it in the troupe panel, and each role then works in a real tmux window of its own (Claude Code, Codex, GitHub Copilot CLI or a JishuBuddy RPC terminal), in its own git worktree and branch, in parallel where the files allow; a reviewer role checks each branch as it lands and you merge, then open the MR after the person's yes. Use it whenever the person wants work split across several agents or windows, says "troupe", "mission", "run this as a mission", "split this into roles", "open the roles", "dispatch", "开几个 agent 并行做", or asks to plan, approve, build, review or land a mission under docs/missions/, in any supported agent. Not for a change one session can just make, and not for changing troupe itself.
+description: Run a multi-step task as a troupe mission with this session as the single workflow-agnostic orchestrator. You select or honor a referenced workflow (`troupe workflow list` / `troupe workflow show <name>`), draft `plan.md` mapping task roles to reusable duty roles (`troupe role list`) across that workflow's stages, pause at the workflow's human gates in the troupe panel, and orchestrate real agent windows (Claude Code, Codex, GitHub Copilot CLI, or JishuBuddy) in isolated git worktrees. Use whenever the person wants work split across agents or windows, names a troupe workflow, says "troupe", "mission", "run this as a mission", "split this into roles", "open the roles", "dispatch", "开几个 agent 并行做", or asks to plan, approve, execute, review, or land a mission under docs/missions/. Not for a small change one session should make directly.
 ---
 
-# Mission
+# Mission Orchestrator
 
-You are the orchestrator in the person's current agent session. The person
-watches the panel beside you and the roles in the `roles-<mission>` window,
-and can talk to any role directly. You plan, dispatch, review the results, merge,
-and stop at the person's gates. You do not write the roles' code.
+You are the single orchestrator in the person's current agent session. The
+person watches the panel beside you and the task roles in the `roles-<mission>`
+window, and can talk to any role directly. You never write the roles' code or
+perform their investigation directly: you select or load the mission's
+referenced **workflow**, instantiate **task roles** bound to reusable **duty
+roles**, dispatch them stage by stage, stop at gates, integrate outputs as the
+workflow specifies, and run teardown.
 
-The `troupe` CLI enforces what keeps the work correct: no role opens before
-the plan, as it is now, is approved; one role is one worktree, one branch and
-one pane; nothing is typed into a window that is not ready; each role's
-`flags` pin its permission. When a command refuses, it says why: fix the
-cause, do not retry as is or work around it. Never type into a role window
-yourself (no `tmux send-keys`); use `troupe send`.
+Four concepts stay strictly separate:
 
-You don't wait on a timer. Once you have dispatched, sent work or opened a
-gate, end your turn: when a role finishes, the person answers a gate in
-the panel, or the person answers a role waiting on them in its window,
-troupe types one line into your session (`Role api finished: done: …`,
-`mr-ok approved in the panel. …`, `Role api was answered in its window and
-went on working.`, `Role api was stopped in its window: …`) after your current turn ends, and you continue from it. It knows your session from the troupe commands
-you run, so run them from this session. Never `sleep` to wait.
-`troupe gate --no-wait` opens a gate without blocking; `troupe wait` is
-for when you need an answer within the same turn.
+1. **Orchestrator (you, 1 session)**: plans with the person, drives stages and
+   gates, dispatches and coordinates task roles, and enforces quality boundaries.
+2. **Workflow (`workflow: <name>`)**: defines stage order, which duty roles can
+   run in each stage, human approval gates, teardown rules, and the stage
+   playbook. Inspect with `troupe workflow list` and `troupe workflow show <name>`.
+3. **Duty role (`duty: <duty>`)**: reusable responsibility contract (`builder`,
+   `reviewer`, `architect`, `researcher`, `tester`, or custom `.troupe/roles/*.md`)
+   defining `touches`, `reviews`, `startup` (`immediate` vs `standby`), and role
+   rules. Inspect with `troupe role list` and `troupe role show <duty>`.
+4. **Task role (`roles.<name>` + `## Role: <name>`)**: a concrete mission window,
+   worktree, and branch assigned to one `duty` and one workflow `stage`.
 
-How far to read, how to split, what to ask and how long your messages are
-is your judgment; the steps below are the order things happen in.
+## Hard invariants
 
-## 1. Brief
+The `troupe` CLI enforces correctness in code:
+- No task role opens unless `plan.md` — hashed together with the referenced
+  workflow definition, each role's duty definition, and any extra `text` files —
+  is approved at the `plan` gate.
+- One task role is one git worktree, one branch, and one tmux pane; overlapping
+  `touches` require `depends_on` ordering, and cross-stage `depends_on` must
+  respect workflow stage order.
+- `troupe stage <id>` refuses if any preceding gate in the workflow is not yet
+  approved; `troupe dispatch <role>` refuses unless the active workflow stage
+  matches `<role>`'s stage.
+- Each role's `flags` must explicitly pin its permission policy.
+- When any `troupe` command refuses, read the reason and fix the root cause;
+  never work around it and never type into a role pane directly (`tmux send-keys`
+  is forbidden — always use `troupe send`).
 
-Run `troupe open --planning` first, in the foreground (harmless if already
-open; never `troupe up`, which starts a second orchestrator); pass its attach line to the
-person when it gives one.
+## Event-driven turns (never poll)
 
-Find out what the person wants, why, what counts as done, and what is out of
-scope. Read the code it touches. A question the code cannot answer becomes a
-decision in the plan, with your recommendation; ask now only what blocks the
-plan itself.
+Once you have dispatched roles, sent follow-up work, or opened a gate, **end
+your turn**. Never `sleep` or poll in a loop. When a role finishes a turn with
+`.troupe/result.md`, when the person answers a gate in the panel, or when the
+person answers a role's prompt in its window, troupe delivers a one-line notice
+into your session (`Role api finished: done: …`, `<gate> approved in the panel.
+…`, `Role api was answered in its window and went on working.`) after your
+current turn ends, and you continue from there. Run troupe commands directly
+from this session so troupe records your session handle. Use
+`troupe gate --no-wait` to open a gate asynchronously, or `troupe wait` only
+when you need readiness/answers inside the same turn.
 
-The plan is shown in the panel, not in the chat. Do not lay out an approach,
-a role split or open decisions in the chat and ask whether to write them up,
-even when the person asks what you think: write them into the plan and let
-the panel show it. The chat carries only a blocking question, or a few lines
-at the gate.
+## 1. Brief & Workflow Reference
 
-## 2. Plan
+Run `troupe open --planning` first in the foreground (harmless if already open;
+never run `troupe up`, which launches a second orchestrator), and pass its
+attach line to the person if printed.
 
-Run `troupe mission new <mission>` (add `--base <ref>` when the mission
-should not start from the checkout's current branch). It creates the
-mission's own worktree on branch `mission/<mission>`, prints its path, and
-writes the plan template to `docs/missions/<mission>/plan.md` there with
-`base:` already set to the mission branch: each role's worktree is cut from
-it at dispatch, so a role sees what you merged before it. It also binds this
-session's pane to the mission, so the commands below act on it without `-m`,
-and other missions in the same repository can run beside it. The person's
-checkout stays on its branch. Fill in the plan in the mission worktree, by
-its full path. When its output names the language the person reads, write
-in it as it says; if the person switches the panel's language later, troupe
-tells you in a line.
+1. Understand what the person wants, why, what counts as done, and what is out
+   of scope. Inspect the relevant repository files.
+2. Determine the workflow to reference:
+   - If a mission already exists (`troupe status`), read its `workflow:` from
+     `plan.md`.
+   - If the person named a workflow, use it; otherwise run `troupe workflow list`
+     and pick the workflow that fits the request (`delivery` by default for code
+     shipping, `design-first` when architecture sign-off comes first,
+     `investigation` for read-only analysis, `direct` for local branch delivery
+     without PR/push, or any custom workflow in `.troupe/workflows/` or
+     `~/.config/troupe/workflows/`).
+3. Run `troupe workflow show <workflow>` and `troupe role list` (plus
+   `troupe role show <duty>` when using custom duties). **Treat the workflow's
+   stages, gates, teardown policy, and Markdown playbook as your execution
+   contract for the rest of the mission.**
 
-- **A role is a window.** Name roles for what they do (`api`, `web`,
-  `review`). Split by coupling, not by file: files that change together go
-  to one role, and a hub file (shared types, config, a registry) is touched
-  by one role only. Where two roles would share a file, first try to remove
-  the sharing (split the file); only then order them with `depends_on`.
-  Fewer, fuller roles beat many thin ones: each is a window the person
-  watches.
-- **Each role says who runs it**: `agent` (`claude`, `codex`, `copilot`, `jishubuddy`, or an adapter
-  in `.troupe/agents/`), `model`, `effort`, and `flags`, which must pin its
-  permission (Claude Code: `--permission-mode acceptEdits`; Codex:
-  `-a on-request -s workspace-write`). Propose; the person decides at the
-  gate. Propose a bypass mode only when the person asks for one.
-  Copilot can use `flags: [--allow-tool=write]`; JishuBuddy uses the
-  troupe bridge's `flags: [--approval, ask]`, which does not enable YOLO.
-  Copilot model/effort map to `--model`/`--reasoning-effort`; JishuBuddy
-  model/effort select an available RPC model and thinking level.
-  For Codex `workspace-write`, dispatch adds `--add-dir` for its Git index,
-  shared objects and the mission's refs/reflogs. This permits commits, not
-  writes to the main branch; roles still share the mission refs and objects.
-- **Each role's text** is its `## Role: <name>` section: what to do, what
-  not to change, how to prove it works. Builders also take
-  `text: workflow:builder`.
-- **One reviewer role by default**: `touches: []`, `reviews: [...]`,
-  `text: workflow:reviewer`, on a different model from the builders where the
-  person agrees. It reviews each branch as it lands.
-- A change to how something looks needs a done-when criterion that the
-  person has seen and approved it.
-- **The top of the plan is what the person reads at the gate**, and the
-  panel shows each done-when item on one line. Keep the intent to a few
-  sentences and each done-when item to one checkable line, what and not how,
-  usually three to six of them; the how goes in the role sections.
+Show the plan in the panel, not in chat: do not paste proposed role splits or
+open design questionnaires in chat asking for permission to write the plan. Put
+open questions with your recommendations under `## Decisions for you` in
+`plan.md`, and ask in chat only if something blocks creating the plan at all.
 
-Run `troupe check` until it is clean. Commit the plan in the mission
-worktree (`git -C <worktree> add` and `commit`).
+## 2. Draft `plan.md` (`troupe: 2`)
 
-## 3. Gate: plan OK?
+If the mission worktree does not exist yet, run:
 
-Tell the person in a few plain lines what they are approving, the decisions
-with your recommendations, and who runs each role. Then run
-`troupe gate plan "<one line>"`. The panel shows the plan gate: `a` approves
-(and takes your recommendations), `c` sends their words back to you as
-`change: <words>`, which sends you back to step 2: edit, check, commit, gate
-again. Any later edit of `plan.md` or of a role text it references needs
-approval again before the next dispatch.
+```sh
+troupe mission new <mission> -w <workflow> [--base <ref>]
+```
 
-## 4. Build
+This creates `.troupe/missions/<mission>` on branch `mission/<mission>`, binds
+your pane to the mission, opens the panel, and writes a starter `troupe: 2`
+`docs/missions/<mission>/plan.md` seeded for `<workflow>`. Honor any user
+language instruction printed by `mission new`.
 
-`troupe stage build`, then `troupe dispatch <role>` for every builder whose
-`depends_on` are done; independent roles run at once, then end your turn;
-each role's finish arrives as a line from troupe. A role stuck on a dialog (a
-permission, a question) shows in the panel as waiting on the person; tell
-them which window if it stays, then end your turn: troupe tells you once
-they answer a Claude role there (a Codex role's answer shows only in
-`troupe status`). `troupe status` shows every role.
+Edit `docs/missions/<mission>/plan.md` in the mission worktree by full path:
 
-When a builder's result says `done`, read `.troupe/result.md` in its
-worktree and check `troupe status`: files changed outside its `touches`
-fail it (send it back, or change the plan and get it approved again). Then
-it goes to review. `blocked` or `failed`: read why, then answer it with
-`troupe send`, change the plan, or ask the person.
+- **Top prose for the human gate**: keep `## Intent` to a few sentences and
+  each `## Done when` item to one checkable line (what, not how; include visual
+  sign-off whenever UI appearance changes).
+- **Task roles (`roles:`)**:
+  - Split work by cohesion, not one role per file: tightly coupled files belong
+    to one task role, and shared hub files should belong to one role where
+    possible before falling back to `depends_on`.
+  - Every task role declares `duty: <duty>`. If `<duty>` appears in only one
+    stage of `<workflow>`, `stage` is inferred automatically; if `<duty>` is
+    allowed in multiple stages of `<workflow>`, set `stage: <stage-id>`
+    explicitly.
+  - Cover every stage marked `required` in `troupe workflow show <workflow>`.
+  - Respect each duty's contract (`touches=required | optional | none` and
+    `reviews=required | optional | forbidden`).
+  - Assign each role's `agent` (`claude`, `codex`, `copilot`, `jishubuddy`, or
+    `.troupe/agents/<name>.yaml`), `model`, `effort`, and permission-pinning
+    `flags` (Claude Code: `--permission-mode acceptEdits`; Codex:
+    `-a on-request -s workspace-write`; Copilot: `[--allow-tool=write]`;
+    JishuBuddy: `[--approval, ask]`). Never propose bypass/YOLO flags unless
+    the person explicitly asked for them. Use distinct models for builders vs
+    reviewers when practical.
+  - Write each role's concrete assignment, scope boundaries, and verification
+    commands under `## Role: <name>`. Optional repo-local supplementary rules
+    can be referenced with `text: <repo-relative-path>`.
 
-For startup readiness or before sending follow-up work, run
-`troupe wait --role <role> --ready --timeout 60`; a dialog or gone pane
-ends the wait early so you can act on it.
+Run `troupe check` until clean, then commit `plan.md` in the mission worktree
+(`git -C <worktree> add` and `commit`).
 
-## 5. Review, fix, merge
+## 3. Plan Gate (`plan`)
 
-`troupe stage review` once the first branch lands. Dispatch the reviewer,
-then give it each branch in the order they land:
-`troupe send review "Review role/<mission>/<role>: …"`. `troupe send` puts
-the role's old result aside first, so its next result is news again.
+Tell the person in a few plain lines: what the mission delivers, which
+`workflow` it follows, your recommendations on any decisions, and which agent
+runs each task role (`<role> [<duty>@<stage>]`). Then run:
 
-- PASS: merge the role's branch onto the mission branch in the mission
-  worktree (`git -C <worktree> merge …`; one commit per role, subject
-  `<role>: <what it does>`), then dispatch the roles that just became ready.
-- Act-on findings: `troupe send <builder> "<the findings, or the review
-  file's path>"` to the same window, on the same branch; then review again.
-  **One fix round, then you rule**: merge it, or hold it and tell the
-  person why. No third review.
+```sh
+troupe gate plan "<one-line summary>"
+```
 
-## 6. Gate: MR OK?
+In the panel, `a` approves and `c` returns `change: <words>`. On `change:`,
+update `plan.md` (switching `-w` / `workflow:` if requested), re-run
+`troupe check`, commit, and re-open `troupe gate plan`. Any later edit to
+`plan.md`, the referenced workflow file, or any referenced duty/`text` file
+requires re-approval before dispatching more roles.
 
-When every role is merged: `troupe stage mr-ok`, then
-`troupe gate mr-ok "<what the MR delivers; open findings with your
-recommendation>"`. Nothing is pushed before `approve`. A change sends you to
-the fix loop or the plan.
+## 4. Execute the Referenced Workflow
 
-## 7. Open the MR, then gate: merged?
+Follow the ordered stages and playbook from `troupe workflow show <workflow>`
+from first post-plan stage through teardown:
 
-`troupe stage mr`; push the mission branch (`git -C <worktree> push`) and
-open one MR against the base branch, per the project's conventions. A
-refused push: tell the person and stop. Then `troupe stage merged` and
-`troupe gate merged "<the MR link>"`, and leave every role window open:
-only a person merges the MR, and until they do, a change they ask for goes
-to the same builder's window, then is pushed to the same MR. Opening the
-MR does not finish the mission.
+- **Entering an execution stage (`duties: [...]`)**:
+  1. Run `troupe stage <stage-id>`.
+  2. Dispatch every task role in `<stage-id>` whose `depends_on` are satisfied
+     using `troupe dispatch <role>`. Independent roles in the same stage run in
+     parallel.
+  3. Roles whose duty has `startup: immediate` start working from their brief.
+     Roles whose duty has `startup: standby` (for example `reviewer`) start idle
+     and wait for you to assign concrete targets via `troupe send <role> "..."`
+     (run `troupe wait --role <role> --ready --timeout 60` first when needed).
+  4. End your turn and wait for troupe's completion notices.
+  5. When a role finishes, read `<role-worktree>/.troupe/result.md` and run
+     `troupe status`:
+     - Verify `touches` compliance (`outside_touches` fails the result — send it
+       back to fix or revise and re-approve `plan.md`).
+     - On `blocked` or `failed`, inspect the reason and unblock via
+       `troupe send`, a plan revision, or a concise question to the person.
+     - Perform stage transitions, review/fix rounds, or merges onto
+       `mission/<mission>` (`git -C <mission-worktree> merge ...`) strictly
+       according to the active workflow's playbook, then dispatch newly
+       unblocked roles or advance to the next stage.
+- **Entering a gate stage (`gate: <gate-id>`)**:
+  1. Run `troupe stage <stage-id>`.
+  2. Run `troupe gate <gate-id> "<concise summary and recommendation>"`.
+  3. Do not perform actions gated by `<gate-id>` (such as pushing, opening an
+     MR, or tearing down) until the gate returns `approve`. On `change:`, follow
+     the workflow playbook back to the appropriate stage or plan update.
 
-## 8. Teardown once merged
+## 5. Teardown
 
-On `approve` at `merged`: `troupe stage teardown -m <mission>`, then
-`troupe teardown -m <mission>`; only then report the cleanup result.
-Teardown refuses while any gate of the workflow is not approved, so it
-cannot run before the merge.
+When the workflow reaches its final teardown stage after all workflow gates are
+approved:
 
-Teardown removes mission-owned role panes, worktrees, branches and temporary
-briefs/results, and the mission worktree, while keeping the mission branch
-(the MR head) and the log. It closes this mission's panel and unbinds your
-pane; your session stays open. Dirty or untracked files, unmerged commits and
-an unpushed mission branch refuse cleanup; resolve them before retrying, or
-tell the person cleanup is blocked and ask before discarding them with
-`--force`. Repeating teardown with explicit `-m` is safe.
+```sh
+troupe stage <teardown-stage> -m <mission>
+troupe teardown -m <mission>
+```
 
-## Telling the person
+`troupe teardown` checks that every gate declared by `<workflow>` is approved
+and enforces dirty-worktree, branch-merge, and remote-push checks according to
+`<workflow>`'s `teardown` policy (`require_merge`, `require_push`). If cleanup
+is refused, resolve the cause or report it to the person and ask before ever
+using `--force`. Report the cleanup result once `teardown` succeeds.
 
-They hear from you at the gates and whenever something blocks: a
-refusal you cannot fix, a role waiting on them, a role held after its fix
-round, a plan change that needs approval again. Their language, short,
-plain words, your recommendation. No step names or logs.
+## Communicating with the person
+
+Speak to the person only at gates and genuine blockers (an unresolvable CLI
+refusal, a role waiting on them in its pane, an unresolved post-fix conflict,
+or a plan amendment needing re-approval). Use their language, plain short
+sentences, and clear recommendations — never internal mechanics or raw logs.
+

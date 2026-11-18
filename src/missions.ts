@@ -1,15 +1,20 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 
-import { loadAgents } from './agents.ts'
+import { AGENTS, loadAgents } from './agents.ts'
+import type { Agent } from './agents.ts'
 import { MISSIONS, rootOf, textProblems } from './check.ts'
-import { excludeTroupe, git, mux, NAME, Refusal, repository, roleText, Usage, within, workflowDirs } from './command-context.ts'
+import { excludeTroupe, git, mux, NAME, Refusal, repository, roleText, Usage, within } from './command-context.ts'
 import type { Mission, Repository, Runtime } from './command-context.ts'
+import { loadDuties } from './duties.ts'
+import type { DutyRole } from './duties.ts'
 import { fold, logPath, readLog } from './log.ts'
 import { callerPane } from './panes.ts'
-import { readPlan } from './plan.ts'
+import { DEFAULT_WORKFLOW, readPlan } from './plan.ts'
 import { tmux } from './run.ts'
 import { planHash } from './state.ts'
+import { loadWorkflows, planTemplatePath } from './workflows.ts'
+import type { Workflow } from './workflows.ts'
 
 // Several missions can be open at once. Each has its own worktree on branch
 // `mission/<m>` and is bound to its orchestrator's pane (`@troupe-mission`,
@@ -149,50 +154,188 @@ export const mission = (r: Runtime, want = ''): Mission => {
   const path = planOf(r, repo, name)
   if (path === undefined) throw new Refusal(`no plan for mission ${name} (${MISSIONS}/${name}/plan.md in its worktree)`)
   const worktree = dirname(dirname(dirname(dirname(path))))
-  const loaded = loadAgents(worktree, r.home)
+  const roots = repo.root === worktree ? [worktree] : [repo.root, worktree]
+  const loadedAgents = loadAgents(worktree, r.home)
+  const loadedDuties = loadDuties(roots, r.home, r.packageRoot)
+  const loadedWorkflows = loadWorkflows(roots, r.home, r.packageRoot, loadedDuties.duties)
   const source = readFileSync(path)
-  const plan = readPlan(source.toString('utf8'), loaded.agents)
-  const problems = [...loaded.problems, ...plan.problems, ...textProblems(worktree, plan)]
-  const texts = new Map<string, string>()
-  const refs = plan.roles.filter(role => role.text !== '').map(role => {
-    try {
-      const text = roleText(r, worktree, plan.workflow, role.text)
-      if (text.bytes === undefined) problems.push(`role ${role.name}: missing text ${role.text}`)
-      else texts.set(role.name, text.bytes)
-
-      return text
-    } catch (error) {
-      problems.push(`role ${role.name}: ${(error as Error).message}`)
-
-      return { ref: role.text, bytes: undefined }
-    }
+  const plan = readPlan(source.toString('utf8'), loadedAgents.agents, {
+    duties: loadedDuties.duties,
+    workflows: loadedWorkflows.workflows,
   })
+  const workflow = loadedWorkflows.workflows[plan.workflow]
+  const problems = [
+    ...loadedAgents.problems,
+    ...loadedDuties.problems,
+    ...loadedWorkflows.problems,
+    ...plan.problems,
+    ...textProblems(worktree, plan),
+  ]
+  const texts = new Map<string, string>()
+  const hashRefs: { ref: string; bytes: string | undefined }[] = [
+    { ref: `workflow:${plan.workflow}`, bytes: workflow?.raw },
+  ]
+  for (const role of plan.roles) {
+    hashRefs.push({ ref: `duty:${role.name}:${role.duty}`, bytes: loadedDuties.duties[role.duty]?.raw })
+    if (role.text !== '') {
+      try {
+        const text = roleText(worktree, role.text)
+        if (text.bytes === undefined) problems.push(`role ${role.name}: missing text ${role.text}`)
+        else texts.set(role.name, text.bytes)
+        hashRefs.push(text)
+      } catch (error) {
+        problems.push(`role ${role.name}: ${(error as Error).message}`)
+        hashRefs.push({ ref: role.text, bytes: undefined })
+      }
+    }
+  }
   const log = logPath(repo.common, name)
   const read = readLog(log)
   if (read.unread > 0) problems.push(`${log}: ${read.unread} unread log line(s)`)
 
-  return { ...repo, name, worktree, path, source: source.toString('utf8'), plan, agents: loaded.agents, problems, hash: planHash(source, refs), log, events: read.events, folded: fold(read.events), texts }
+  return {
+    ...repo,
+    name,
+    worktree,
+    path,
+    source: source.toString('utf8'),
+    plan,
+    agents: loadedAgents.agents,
+    duties: loadedDuties.duties,
+    workflow,
+    problems,
+    hash: planHash(source, hashRefs),
+    log,
+    events: read.events,
+    folded: fold(read.events),
+    texts,
+  }
+}
+
+/** Synthesizes workflow-valid starter roles when a non-default workflow's stages differ from `delivery`. */
+const renderStarterPlan = (
+  templateText: string,
+  missionName: string,
+  branch: string,
+  workflow: Workflow,
+  duties: Record<string, DutyRole>,
+  agents: Record<string, Agent> = AGENTS,
+): string => {
+  const stamped = templateText
+    .replaceAll('<mission>', () => missionName)
+    .replace(/^base: *\S*/m, `base: ${branch}`)
+    .replace(/^workflow: *\S*/m, `workflow: ${workflow.name}`)
+  const probe = readPlan(stamped, agents, { duties, workflows: { [workflow.name]: workflow } })
+  if (probe.problems.length === 0) return stamped
+
+  const executionStages = workflow.stages.filter(stage => stage.duties.length > 0)
+  const roleEntries: { name: string; stageId: string; dutyName: string; duty: DutyRole; upstream: string[] }[] = []
+  const upstreamNames: string[] = []
+  const usedNames = new Set<string>()
+  for (const stage of executionStages) {
+    if (!stage.required && roleEntries.length > 0 && stage.duties[0] !== 'reviewer') continue
+    const dutyName = stage.duties[0]!
+    const duty = duties[dutyName]
+    if (duty === undefined) continue
+    const candidate = usedNames.has(stage.id) ? `${stage.id}-${dutyName}` : stage.id
+    usedNames.add(candidate)
+    roleEntries.push({ name: candidate, stageId: stage.id, dutyName, duty, upstream: [...upstreamNames] })
+    if (duty.reviews !== 'required') upstreamNames.push(candidate)
+  }
+  if (roleEntries.length === 0) return stamped
+
+  const yamlLines = [
+    '```yaml',
+    'troupe: 2',
+    'goal: "<the mission in one sentence: what it delivers>"',
+    'why: "<one line: why now>"',
+    `workflow: ${workflow.name}`,
+    `base: ${branch}`,
+    'roles:',
+    ...roleEntries.flatMap(({ name, stageId, dutyName, duty, upstream }) => {
+      const touches = duty.touches === 'required' ? `[src/${name}/]` : '[]'
+      const targets = upstream.length > 0 ? upstream : [roleEntries[0]!.name]
+
+      return [
+        `  ${name}:`,
+        `    duty: ${dutyName}`,
+        `    stage: ${stageId}`,
+        '    agent: claude',
+        '    model: sonnet',
+        '    effort: high',
+        '    flags: [--permission-mode, acceptEdits]',
+        `    goal: "<one line: what ${name} delivers>"`,
+        `    touches: ${touches}`,
+        ...(duty.reviews === 'required' ? [`    reviews: [${targets.join(', ')}]`] : []),
+      ]
+    }),
+    '```',
+  ].join('\n')
+
+  const roleSections = roleEntries
+    .map(({ name }) => `## Role: ${name}\n\n- **Deliver**: <what ${name} produces or verifies>`)
+    .join('\n\n')
+
+  return [
+    `# ${missionName}: <title>`,
+    '',
+    '## Intent',
+    '',
+    '<Two or three sentences: what the person wants and why.>',
+    '',
+    '## Done when',
+    '',
+    '- <one line the person can check: what, not how>',
+    '- <one line the person can check>',
+    '',
+    '## Out of scope',
+    '',
+    '<What this mission deliberately does not do.>',
+    '',
+    yamlLines,
+    '',
+    roleSections,
+    '',
+  ].join('\n')
 }
 
 /**
  * Creates the mission's worktree on a new `mission/<m>` branch, cut from the
- * main checkout's HEAD (or `base`), with the skill's plan template. git
- * refuses a branch or worktree that already exists. The main checkout's
- * branch never changes.
+ * main checkout's HEAD (or `base`), initialized with the chosen workflow's
+ * plan template. git refuses a branch or worktree that already exists.
  */
-export const newMission = (r: Runtime, repo: Repository, name: string, base: string): string => {
+export const newMission = (
+  r: Runtime,
+  repo: Repository,
+  name: string,
+  base: string,
+  workflowName = DEFAULT_WORKFLOW,
+): string => {
   if (!NAME.test(name)) throw new Refusal(`invalid mission name: ${name}`)
   const branch = `mission/${name}`
   const worktree = within(repo.root, `.troupe/missions/${name}`)
   if (existsSync(logPath(repo.common, name))) throw new Refusal(`mission ${name} already has a log: ${logPath(repo.common, name)}`)
-  const template = workflowDirs(r, 'troupe-mission').map(dir => join(dir, 'templates/plan.md')).find(path => existsSync(path))
-  if (template === undefined) throw new Refusal('the troupe-mission plan template is missing; run troupe setup')
+  const loadedAgents = loadAgents(repo.root, r.home)
+  const loadedDuties = loadDuties(repo.root, r.home, r.packageRoot)
+  const loadedWorkflows = loadWorkflows(repo.root, r.home, r.packageRoot, loadedDuties.duties)
+  const workflow = loadedWorkflows.workflows[workflowName]
+  if (workflow === undefined) {
+    const choices = Object.keys(loadedWorkflows.workflows).sort().join(', ') || 'none'
+    throw new Refusal(`unknown workflow "${workflowName}" (choose ${choices})`)
+  }
+  const workflowProblem = loadedWorkflows.problems.find(problem => problem.startsWith(`${workflow.path}:`))
+  if (workflowProblem !== undefined) throw new Refusal(workflowProblem)
+  const template = planTemplatePath(repo.root, r.home, r.packageRoot)
+  if (template === undefined) throw new Refusal('the plan template is missing')
   excludeTroupe(repo.common)
   mkdirSync(dirname(worktree), { recursive: true })
   git(r, repo.root, ['worktree', 'add', '-b', branch, worktree, ...(base ? [base] : [])])
   const plan = join(worktree, MISSIONS, name, 'plan.md')
   mkdirSync(dirname(plan), { recursive: true })
-  writeFileSync(plan, readFileSync(template, 'utf8').replace(/^base: *\S*/m, `base: ${branch}`))
+  writeFileSync(
+    plan,
+    renderStarterPlan(readFileSync(template, 'utf8'), name, branch, workflow, loadedDuties.duties, loadedAgents.agents),
+  )
 
   return worktree
 }

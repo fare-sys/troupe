@@ -2,15 +2,17 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 
-import { check } from './check.ts'
+import { check, repoRootsOf } from './check.ts'
 import { AGENTS, HARNESSES } from './agents.ts'
+import { loadDuties } from './duties.ts'
 import { launchAgent } from './harness.ts'
 import { langOf, WRITE_CHINESE } from './i18n.ts'
-import { clean, mux, NAME, Refusal, repository, runtime, Usage, workflowStages } from './command-context.ts'
+import { clean, mux, NAME, Refusal, repository, runtime, Usage } from './command-context.ts'
 import type { Mission, Reply, Runtime } from './command-context.ts'
-import { append, fold, logPath, PLAN_GATE, readLog } from './log.ts'
+import { append, fold, isApproved, logPath, PLAN_GATE, readLog } from './log.ts'
 import { callerOf, dropMission, finished, heldBy, markedPanes, mission, missionList, newMission, planOf, resolveMission, Unresolved } from './missions.ts'
 import { createPane, ownedPane } from './panes.ts'
+import { DEFAULT_WORKFLOW } from './plan.ts'
 import { close, dispatch, send, statusOf, teardown, turnOf, waitsOnOf } from './role-commands.ts'
 import { available, installSkill, setup, skillTarget } from './setup.ts'
 import { readResult } from './state.ts'
@@ -19,9 +21,12 @@ import { panel } from './panel.ts'
 import { recordOrchestrator } from './notices.ts'
 import { afterApproval, markOrchestrator } from './orchestrator.ts'
 import { createPanel, openPanel } from './panel-open.ts'
+import { loadWorkflows, unapprovedGatesBefore } from './workflows.ts'
 
 const OPTIONS: Record<string, string[]> = {
-  setup: ['remove'], open: ['planning'], up: ['orch'], mission: ['base'], check: [], approve: [], gate: ['no-wait'], stage: [],
+  setup: ['remove'], open: ['planning'], up: ['orch', 'workflow'], mission: ['base', 'workflow'], check: [],
+  workflow: ['json'], role: ['json'],
+  approve: [], gate: ['no-wait'], stage: [],
   dispatch: [], status: ['json', 'watch'], send: [], wait: ['role', 'gate', 'timeout', 'ready'], teardown: ['force'], close: ['all'], panel: ['once', 'plain', 'width', 'height', 'no-anim'],
 }
 
@@ -30,7 +35,8 @@ const parsed = (command: string, args: string[]) => {
   let result
   try {
     result = parseArgs({ args, allowPositionals: true, options: {
-      mission: { type: 'string', short: 'm' }, remove: { type: 'boolean' }, orch: { type: 'string' },
+      mission: { type: 'string', short: 'm' }, workflow: { type: 'string', short: 'w' },
+      remove: { type: 'boolean' }, orch: { type: 'string' },
       'no-wait': { type: 'boolean' }, json: { type: 'boolean' }, watch: { type: 'boolean' },
       ready: { type: 'boolean' }, force: { type: 'boolean' },
       planning: { type: 'boolean' }, base: { type: 'string' },
@@ -56,7 +62,12 @@ const id = (value: string | undefined, what: string): string => {
 }
 
 const approve = async (r: Runtime, m: Mission): Promise<Reply> => {
-  const show = [m.plan.goal, ...m.plan.roles.map(role => `${role.name}: ${role.agent} / ${role.model || 'default'} / ${role.effort || 'default'} / flags ${JSON.stringify(role.flags)}`), m.hash, `Problems: ${m.problems.join('; ') || 'none'}`].join('\n')
+  const show = [
+    `${m.plan.goal} (workflow: ${m.plan.workflow})`,
+    ...m.plan.roles.map(role => `${role.name} [${role.duty}@${role.stage || '?'}]: ${role.agent} / ${role.model || 'default'} / ${role.effort || 'default'} / flags ${JSON.stringify(role.flags)}`),
+    m.hash,
+    `Problems: ${m.problems.join('; ') || 'none'}`,
+  ].join('\n')
   r.write(`${show}\n`)
   clean(m)
   if (!/^y(?:es)?$/i.test((await r.ask('Approve? [y/N] ')).trim())) return { code: 1, out: 'Not approved.\n' }
@@ -77,8 +88,12 @@ const wait = async (r: Runtime, m: Mission, target: { role?: string; gate?: stri
     const folded = fold(read.events)
     if (target.gate !== undefined) {
       const answer = folded.gates.get(target.gate)
-      if (answer?.answer !== undefined) return { code: 0, out: answer.answer === 'approve'
-        ? `approve\n${target.gate === 'mr-ok' || target.gate === 'merged' ? `${afterApproval(target.gate, m.name)}\n` : ''}` : `change: ${answer.text ?? ''}\n` }
+      if (answer?.answer !== undefined) {
+        const hasNext = m.workflow?.stages.find(one => one.gate === target.gate)?.next !== undefined
+        const suffix = hasNext ? `${afterApproval(m.workflow, target.gate, m.name)}\n` : ''
+
+        return { code: 0, out: answer.answer === 'approve' ? `approve\n${suffix}` : `change: ${answer.text ?? ''}\n` }
+      }
     } else {
       const opened = folded.roles.get(target.role ?? '')
       if (opened === undefined) throw new Refusal(`role ${target.role}: not dispatched`)
@@ -100,13 +115,128 @@ const wait = async (r: Runtime, m: Mission, target: { role?: string; gate?: stri
   }
 }
 
-const stage = (r: Runtime, m: Mission, name: string): Reply => {
-  const read = workflowStages(r, m.plan.workflow)
-  if (read.problems.length > 0) throw new Refusal(read.problems.join('\n'))
-  if (!read.stages.some(stage => stage.id === name)) throw new Refusal(`unknown stage ${name}; choose ${read.stages.map(stage => stage.id).join(', ')}`)
+const stage = (m: Mission, name: string): Reply => {
+  if (m.workflow === undefined) {
+    throw new Refusal(m.problems.find(problem => problem.includes('workflow')) ?? `unknown workflow "${m.plan.workflow}"`)
+  }
+  if (!m.workflow.stages.some(one => one.id === name)) {
+    throw new Refusal(`unknown stage ${name}; choose ${m.workflow.stages.map(one => one.id).join(', ')}`)
+  }
+  const blocked = unapprovedGatesBefore(m.workflow, name, m.folded.gates, isApproved(m.folded, m.hash))
+  if (blocked.length > 0) {
+    throw new Refusal(`cannot enter stage ${name}: gate ${blocked.join(', ')} is not approved yet`)
+  }
   append(m.log, 'cli', { ev: 'stage', stage: name })
 
   return { code: 0, out: `Stage: ${name}\n` }
+}
+
+const workflowCommand = (r: Runtime, pos: string[], json: boolean): Reply => {
+  const action = pos[0] ?? 'list'
+  if (action !== 'list' && action !== 'show') throw new Usage('workflow [list | show <name>] [--json]')
+  count(pos, action === 'show' ? 2 : 0, action === 'show' ? 2 : 1, 'workflow [list | show <name>] [--json]')
+  const roots = repoRootsOf(r.cwd, r.run)
+  const loadedDuties = loadDuties(roots, r.home, r.packageRoot)
+  const loadedWorkflows = loadWorkflows(roots, r.home, r.packageRoot, loadedDuties.duties)
+  const problems = [...loadedDuties.problems, ...loadedWorkflows.problems]
+
+  if (action === 'list') {
+    const items = Object.values(loadedWorkflows.workflows)
+      .sort((a, b) => (a.name === DEFAULT_WORKFLOW ? -1 : b.name === DEFAULT_WORKFLOW ? 1 : a.name.localeCompare(b.name)))
+      .map(({ raw: _raw, ...rest }) => rest)
+    if (json) return { code: problems.length > 0 ? 1 : 0, out: `${JSON.stringify({ workflows: items, problems })}\n` }
+    const lines = items.map(wf => {
+      const flow = wf.stages
+        .map(one => (one.gate !== undefined ? `[${one.gate}]` : one.duties.length > 0 ? `${one.id}(${one.duties.join(',')})` : one.id))
+        .join(' -> ')
+
+      return `${wf.name}${wf.name === DEFAULT_WORKFLOW ? ' (default)' : ''} [${wf.source}] · ${flow}\n  ${wf.summary}`
+    })
+
+    return {
+      code: problems.length > 0 ? 1 : 0,
+      out: `${[...lines, ...problems].join('\n') || 'No workflows found.'}\n`,
+    }
+  }
+
+  const targetName = id(pos[1], 'workflow')
+  const wf = loadedWorkflows.workflows[targetName]
+  if (wf === undefined) {
+    const choices = Object.keys(loadedWorkflows.workflows).sort().join(', ') || 'none'
+    if (problems.length > 0) throw new Refusal(problems.join('\n'))
+    throw new Refusal(`unknown workflow "${targetName}" (choose ${choices})`)
+  }
+  const { raw: _raw, ...info } = wf
+  if (json) return { code: problems.length > 0 ? 1 : 0, out: `${JSON.stringify({ workflow: info, problems })}\n` }
+  const stageLines = wf.stages.map((one, idx) => {
+    const details = [
+      ...(one.gate !== undefined ? [`gate: ${one.gate}`] : []),
+      ...(one.duties.length > 0 ? [`duties: ${one.duties.join(', ')}`] : []),
+      ...(one.required ? ['required'] : []),
+    ]
+
+    return `  ${idx + 1}. ${one.id} (${one.label})${details.length > 0 ? ` · ${details.join(' · ')}` : ''}`
+  })
+
+  return {
+    code: problems.length > 0 ? 1 : 0,
+    out: [
+      `Workflow: ${wf.name} (${wf.source})`,
+      `Summary: ${wf.summary}`,
+      `Teardown: require_merge=${wf.teardown.requireMerge}, require_push=${wf.teardown.requirePush}`,
+      'Stages:',
+      ...stageLines,
+      '',
+      wf.body,
+      ...problems,
+      '',
+    ].join('\n'),
+  }
+}
+
+const roleCommand = (r: Runtime, pos: string[], json: boolean): Reply => {
+  const action = pos[0] ?? 'list'
+  if (action !== 'list' && action !== 'show') throw new Usage('role [list | show <duty>] [--json]')
+  count(pos, action === 'show' ? 2 : 0, action === 'show' ? 2 : 1, 'role [list | show <duty>] [--json]')
+  const roots = repoRootsOf(r.cwd, r.run)
+  const loaded = loadDuties(roots, r.home, r.packageRoot)
+  if (action === 'list') {
+    const items = Object.values(loaded.duties)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(({ raw: _raw, ...rest }) => rest)
+    if (json) return { code: loaded.problems.length > 0 ? 1 : 0, out: `${JSON.stringify({ roles: items, problems: loaded.problems })}\n` }
+    const lines = items.map(
+      duty => `${duty.name} [${duty.source}] · touches=${duty.touches} · startup=${duty.startup} · reviews=${duty.reviews}\n  ${duty.summary}`,
+    )
+
+    return {
+      code: loaded.problems.length > 0 ? 1 : 0,
+      out: `${[...lines, ...loaded.problems].join('\n') || 'No duty roles found.'}\n`,
+    }
+  }
+
+  const targetName = id(pos[1], 'duty role')
+  const duty = loaded.duties[targetName]
+  if (duty === undefined) {
+    const choices = Object.keys(loaded.duties).sort().join(', ') || 'none'
+    if (loaded.problems.length > 0) throw new Refusal(loaded.problems.join('\n'))
+    throw new Refusal(`unknown duty role "${targetName}" (choose ${choices})`)
+  }
+  const { raw: _raw, ...info } = duty
+  if (json) return { code: loaded.problems.length > 0 ? 1 : 0, out: `${JSON.stringify({ role: info, problems: loaded.problems })}\n` }
+
+  return {
+    code: loaded.problems.length > 0 ? 1 : 0,
+    out: [
+      `Duty role: ${duty.name} (${duty.source})`,
+      `Summary: ${duty.summary}`,
+      `Constraints: touches=${duty.touches}, startup=${duty.startup}, reviews=${duty.reviews}`,
+      '',
+      duty.body,
+      ...loaded.problems,
+      '',
+    ].join('\n'),
+  }
 }
 
 const listing = (r: Runtime, json: boolean): string => {
@@ -130,8 +260,8 @@ const status = async (r: Runtime, want: string, json: boolean, watch: boolean): 
         const view = statusOf(r, mission(r, name))
         code = view.problems.length > 0 ? 1 : 0
         out = json ? `${JSON.stringify(view)}\n` : [
-          `${view.mission} · stage ${view.stage || '—'}`,
-          ...view.roles.map(role => `${role.name}: ${role.state} · ${role.agent} · ${role.branch || '—'} · ${role.commits.length} commits · changed ${role.changed.join(', ') || '—'} · outside ${role.outside.join(', ') || '—'}${role.summary ? ` · ${role.summary}` : ''}${role.problem ? ` · ${role.problem}` : ''}`),
+          `${view.mission} · workflow ${view.workflow} · stage ${view.stage || '—'}`,
+          ...view.roles.map(role => `${role.name} [${role.duty}@${role.stage || '?'}]: ${role.state} · ${role.agent} · ${role.branch || '—'} · ${role.commits.length} commits · changed ${role.changed.join(', ') || '—'} · outside ${role.outside.join(', ') || '—'}${role.summary ? ` · ${role.summary}` : ''}${role.problem ? ` · ${role.problem}` : ''}`),
           ...view.gates.map(gate => `Gate ${gate.id}: ${gate.ask || 'needs you'}`),
           ...view.problems,
         ].join('\n') + '\n'
@@ -149,29 +279,29 @@ const status = async (r: Runtime, want: string, json: boolean, watch: boolean): 
 }
 
 /** `troupe mission new <m>`: the mission's worktree and plan, bound to the caller pane, with its panel. */
-const missionNew = (r: Runtime, name: string, base: string): Reply => {
+const missionNew = (r: Runtime, name: string, base: string, workflowName: string): Reply => {
   const repo = repository(r)
   const caller = callerOf(r)
   const held = caller === undefined ? { name: '', root: '' } : heldBy(r, markedPanes(r), caller)
   if (held.name !== '') throw new Refusal(`this pane runs mission ${held.name}${held.root === repo.root ? '' : ` in ${held.root}`}; start ${name} from another pane`)
-  const worktree = newMission(r, repo, name, base)
+  const worktree = newMission(r, repo, name, base, workflowName)
   if (caller !== undefined) markOrchestrator(r, repo, caller, name)
   const opened = available(r, 'tmux') ? openPanel(r, name).out : ''
 
   const language = langOf(r.home, r.env) === 'zh' ? `${WRITE_CHINESE}\n` : ''
 
-  return { code: 0, out: `Mission ${name}: ${worktree} on mission/${name}\n${language}${opened}` }
+  return { code: 0, out: `Mission ${name} (workflow ${workflowName}): ${worktree} on mission/${name}\n${language}${opened}` }
 }
 
 /** `troupe up -m <m>`: a new mission, with its orchestrator working in the mission worktree and its panel beside it. */
-const up = (r: Runtime, want: string, orch: string): Reply => {
+const up = (r: Runtime, want: string, orch: string, workflowName: string): Reply => {
   if (want === '') throw new Refusal('up starts a new mission: pass -m <mission>')
   if (!available(r, 'tmux')) throw new Refusal('tmux is required for troupe up')
   if (!available(r, orch)) throw new Refusal(`${orch} was not found on PATH`)
   let installed = ''
   if (!existsSync(join(skillTarget(r, orch), 'SKILL.md'))) installed = installSkill(r, orch)
   const repo = repository(r)
-  const worktree = newMission(r, repo, want, '')
+  const worktree = newMission(r, repo, want, '', workflowName)
   let opened
   let panel
   try {
@@ -223,26 +353,30 @@ export const execute = async (command: string, args: string[], overrides: Partia
       count(pos, 0, 0, 'open [-m mission] [--planning]')
       return openPanel(r, want, !!values.planning)
     }
+    if (command === 'workflow') return workflowCommand(r, pos, !!values.json)
+    if (command === 'role') return roleCommand(r, pos, !!values.json)
     if (command === 'mission') {
-      if (pos[0] !== 'new') throw new Usage('mission new <name> [--base <ref>]')
-      count(pos, 2, 2, 'mission new <name> [--base <ref>]')
+      if (pos[0] !== 'new') throw new Usage('mission new <name> [-w <workflow>] [--base <ref>]')
+      count(pos, 2, 2, 'mission new <name> [-w <workflow>] [--base <ref>]')
       if (values.mission !== undefined) throw new Usage('mission new takes the name as its argument, not -m')
-      return missionNew(r, id(pos[1], 'mission'), values.base ?? '')
+      const wfName = values.workflow === undefined ? DEFAULT_WORKFLOW : id(values.workflow, 'workflow')
+      return missionNew(r, id(pos[1], 'mission'), values.base ?? '', wfName)
     }
     if (command === 'up') {
-      count(pos, 0, 0, `up -m <mission> [--orch ${HARNESSES.join('|')}]`)
+      count(pos, 0, 0, `up -m <mission> [-w <workflow>] [--orch ${HARNESSES.join('|')}]`)
       const orch = values.orch ?? HARNESSES.find(name => available(r, name)) ?? 'claude'
       if (!HARNESSES.some(name => name === orch)) throw new Usage(`--orch must be ${HARNESSES.join(', ')}`)
-      return up(r, want, orch)
+      const wfName = values.workflow === undefined ? DEFAULT_WORKFLOW : id(values.workflow, 'workflow')
+      return up(r, want, orch, wfName)
     }
     if (command === 'check') {
       count(pos, 0, want ? 0 : 1, 'check [-m mission | plan file or folder]')
-      if (pos[0] !== undefined) return check(r.cwd, pos[0], r.home, r.run)
+      if (pos[0] !== undefined) return check(r.cwd, pos[0], r.home, r.run, r.packageRoot)
       // The resolved mission's plan, read in its worktree.
       const repo = repository(r)
       let name
       try { name = resolveMission(r, repo, want) } catch (error) { if (error instanceof Unresolved) return { code: 2, out: `troupe check: ${error.message}\n` }; throw error }
-      return check(r.cwd, planOf(r, repo, name) ?? join('docs/missions', name, 'plan.md'), r.home, r.run)
+      return check(r.cwd, planOf(r, repo, name) ?? join('docs/missions', name, 'plan.md'), r.home, r.run, r.packageRoot)
     }
     // Reject automated approval before reading a plan or writing any file.
     if (command === 'approve' && (!r.inputTTY || !r.outputTTY)) throw new Refusal('approve requires both stdin and stdout to be terminals')
@@ -273,7 +407,7 @@ export const execute = async (command: string, args: string[], overrides: Partia
     if (command === 'teardown') return await teardown(r, m, !!values.force)
     if (command === 'approve') return await approve(r, m)
     if (command === 'dispatch') return await dispatch(r, m, id(pos[0], 'role'))
-    if (command === 'stage') return stage(r, m, id(pos[0], 'stage'))
+    if (command === 'stage') return stage(m, id(pos[0], 'stage'))
     if (command === 'gate') {
       const gate = id(pos[0], 'gate')
       append(m.log, 'cli', { ev: 'gate-open', gate, ...(pos[1] === undefined ? {} : { ask: pos[1] }), ...(gate === PLAN_GATE ? { plan: m.hash } : {}) })

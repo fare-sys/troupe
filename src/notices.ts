@@ -96,7 +96,7 @@ export const pendingNotices = (r: Runtime, m: Mission, events: Logged[], since: 
     // A gate opened again since, or a plan that changed since its answer, has nothing to report.
     if (gate?.answeredAt !== e.at || (e.gate === 'plan' && gate.plan !== m.hash)) continue
     const key = `gate:${e.gate}:${e.at}`
-    if (!told.has(key)) notices.push({ key, text: e.answer === 'approve' ? `${e.gate} approved in the panel. ${afterApproval(e.gate, m.name)}` : `Change requested on ${e.gate}: ${e.text ?? ''}` })
+    if (!told.has(key)) notices.push({ key, text: e.answer === 'approve' ? `${e.gate} approved in the panel. ${afterApproval(m.workflow, e.gate, m.name)}` : `Change requested on ${e.gate}: ${e.text ?? ''}` })
   }
   // Only the last switch counts: switching back and forth before it is told says nothing new.
   const switched = events.filter(e => e.ev === 'lang' && e.by === 'panel' && e.at >= since).at(-1)

@@ -56,7 +56,7 @@ test('real scratch tmux: JishuBuddy preserves multiline bracketed prompts and do
 test('real scratch tmux: open marks one panel, keeps focus, and is a no-op the second time', { skip: spawnSync('tmux', ['-V']).status !== 0, timeout: 15000 }, async t => {
   const root = mkdtempSync(join(tmpdir(), 'troupe-open-integration-'))
   const socket = `troupe-open-${process.pid}-${randomUUID().slice(0, 8)}`
-  const env = { ...hostless(process.env), TMUX: undefined, TMUX_PANE: undefined, TROUPE_TMUX_SOCKET: socket }
+  const env = { ...hostless(process.env), HOME: join(root, '.home'), TMUX: undefined, TMUX_PANE: undefined, TROUPE_TMUX_SOCKET: socket }
   t.after(() => {
     tmux(['kill-server'], undefined, env)
     rmSync(root, { recursive: true, force: true })
@@ -144,7 +144,7 @@ screen:
 paste: bracketed
 `)
   mkdirSync(join(root, 'docs/missions/m1'), { recursive: true })
-  writeFileSync(join(root, 'docs/missions/m1/plan.md'), '# Scratch\n\n```yaml\ngoal: Check commands\nbase: main\nroles:\n  api:\n    agent: fake\n    flags: [--policy, ask]\n    touches: []\n```\n\n## Role: api\n\nReply when sent a line.\n')
+  writeFileSync(join(root, 'docs/missions/m1/plan.md'), '# Scratch\n\n```yaml\ntroupe: 2\ngoal: Check commands\nbase: main\nroles:\n  api:\n    duty: tester\n    agent: fake\n    flags: [--policy, ask]\n    touches: []\n```\n\n## Role: api\n\nReply when sent a line.\n')
   git('add', '.')
   git('-c', 'user.name=Probe', '-c', 'user.email=probe@example.invalid', 'commit', '-qm', 'initial')
   const r = runtime({ cwd: root, home, env, inputTTY: false, outputTTY: false })
@@ -201,7 +201,11 @@ paste: bracketed
 })
 
 /** The test's own environment, without the agent session or terminal it may be running inside (#43 reads those). */
-const hostless = env => Object.fromEntries(Object.entries(env).filter(([key]) => !/^(CLAUDE|CODEX|HERDR)_|^CLAUDECODE$/.test(key)))
+const hostless = env => ({
+  ...Object.fromEntries(Object.entries(env).filter(([key]) => !/^(CLAUDE|CODEX|HERDR)_|^CLAUDECODE$/.test(key))),
+  LC_ALL: 'C',
+  LANG: 'C',
+})
 const cleanupRepo = t => {
   const root = mkdtempSync(join(tmpdir(), 'troupe-teardown-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
@@ -210,7 +214,7 @@ const cleanupRepo = t => {
   git('config', 'user.name', 'Probe')
   git('config', 'user.email', 'probe@example.invalid')
   mkdirSync(join(root, 'docs/missions/m1'), { recursive: true })
-  writeFileSync(join(root, 'docs/missions/m1/plan.md'), '# Cleanup\n\n```yaml\ngoal: Cleanup\nbase: mission/m1\nroles:\n  api:\n    agent: claude\n    flags: [--permission-mode, acceptEdits]\n    touches: [src/]\n```\n\n## Role: api\n\nBuild it.\n')
+  writeFileSync(join(root, 'docs/missions/m1/plan.md'), '# Cleanup\n\n```yaml\ntroupe: 2\ngoal: Cleanup\nbase: mission/m1\nroles:\n  api:\n    duty: builder\n    agent: claude\n    flags: [--permission-mode, acceptEdits]\n    touches: [src/]\n```\n\n## Role: api\n\nBuild it.\n')
   writeFileSync(join(root, 'tracked'), 'initial')
   git('add', '.')
   git('commit', '-qm', 'initial')
@@ -435,7 +439,7 @@ const parallelWorld = (t, prefix) => {
   return { base, env, repo, orchestrator, at, panes, windows }
 }
 
-const fakePlan = name => `# ${name}\n\n\`\`\`yaml\ngoal: Check ${name}\nbase: mission/${name}\nroles:\n  api:\n    agent: fake\n    flags: [--policy, ask]\n    touches: []\n\`\`\`\n\n## Role: api\n\nReply.\n`
+const fakePlan = name => `# ${name}\n\n\`\`\`yaml\ntroupe: 2\ngoal: Check ${name}\nbase: mission/${name}\nroles:\n  api:\n    duty: tester\n    agent: fake\n    flags: [--policy, ask]\n    touches: []\n\`\`\`\n\n## Role: api\n\nReply.\n`
 
 test('real scratch tmux: two missions in one repository each follow their own orchestrator pane', { skip: spawnSync('tmux', ['-V']).status !== 0, timeout: 40000 }, async t => {
   const w = parallelWorld(t, 'parallel')

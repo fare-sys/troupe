@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { argvOf, optionOf, screenOf } from './agents.ts'
 import type { Agent, Screen } from './agents.ts'
 import { ACTIVITY_EVENTS, ACTIVITY_FILE, claudeTurn, reportedActivity } from './activity.ts'
-import { clean, excludeTroupe, git, mux, Refusal, within, workflowStages } from './command-context.ts'
+import { clean, excludeTroupe, git, mux, Refusal, stagesOf, within } from './command-context.ts'
 import type { Mission, Reply, Runtime } from './command-context.ts'
 import { langOf, WRITE_CHINESE_ROLE } from './i18n.ts'
 import type { Lang } from './i18n.ts'
@@ -19,14 +19,19 @@ import { earlierResults, readResult, RESULT_FILE, roleState, waitingOn, workOf }
 import { shellOf, tmux } from './run.ts'
 import { CONTEXT_FILE, statusLineCommand } from './statusline.ts'
 import { codexTurn, tokensOf } from './usage.ts'
+import { effectiveStageId, unapprovedGatesBefore } from './workflows.ts'
 
 export const briefOf = (m: Mission, role: Role, worktree: string, branch: string, lang: Lang = 'en'): string => {
-  const isReviewer = role.touches.length === 0 && role.reviews.length > 0
+  const duty = m.duties[role.duty]
+  const isStandby = duty !== undefined ? duty.startup === 'standby' : role.touches.length === 0 && role.reviews.length > 0
+  const tracksDoneWhen = duty !== undefined ? duty.reviews !== 'forbidden' : isStandby
 
   return [
     `# ${m.name}: ${role.name}`, '',
     `Mission goal: ${m.plan.goal}`,
     ...(m.plan.why ? [`Why: ${m.plan.why}`] : []),
+    `Workflow: ${m.plan.workflow}${role.stage ? ` · Stage: ${role.stage}` : ''}`,
+    ...(role.duty ? [`Duty role: ${role.duty}`] : []),
     ...(role.goal ? [`Your goal: ${role.goal}`] : []),
     '',
     ...(m.plan.doneWhen.length > 0
@@ -40,15 +45,16 @@ export const briefOf = (m: Mission, role: Role, worktree: string, branch: string
     ...(role.skills.length > 0 ? [`Skills to load: ${role.skills.join(', ')}.`] : []),
     '',
     ...(lang === 'zh' ? [WRITE_CHINESE_ROLE, ''] : []),
+    ...(duty !== undefined ? [`## Duty: ${duty.name}`, '', duty.body, ''] : []),
     ...(m.texts.has(role.name) ? ['## Referenced instructions', '', (m.texts.get(role.name) ?? '').trim(), ''] : []),
     ...(role.section ? ['## Your role', '', role.section, ''] : []),
     '## Finish', '',
-    ...(isReviewer
+    ...(isStandby
       ? ['On initial startup before a branch is sent to you, read your instructions and the plan, then stop and wait without writing a result file. Once a branch is sent to you and reviewed:', '']
       : []),
     `Write ${RESULT_FILE} inside your worktree (create .troupe/ if needed; git ignores it, do not commit it):`, '',
     '```markdown', '---', 'status: done', 'summary: "<one-line summary; keep double quotes>"',
-    ...(isReviewer ? ['done_when: [1, 3] # optional on PASS: 1-based Done-when numbers verified'] : []),
+    ...(tracksDoneWhen ? ['done_when: [1, 3] # optional on PASS: 1-based Done-when numbers verified'] : []),
     '---', '<What changed or was reviewed, how you verified it, open items for the orchestrator.>', '```', '',
     'Use status: done, blocked or failed. Then stop.', '',
   ].join('\n')
@@ -105,8 +111,10 @@ export const liveOf = (r: Runtime, m: Mission, role: Role): Live & { problem?: s
   while (lines.at(-1)?.trim() === '') lines.pop()
   const waitsOn = pane === undefined || agent === undefined ? undefined : waitsOnOf(agent, pane.screen)
   const tokens = opened?.worktree && (agent?.usage === 'claude' || agent?.usage === 'codex') ? tokensOf(agent.usage, opened.worktree, opened.at, r.home) : undefined
+  const duty = m.duties?.[role.duty]
+  const tracksReviews = duty !== undefined ? duty.reviews !== 'forbidden' : role.touches.length === 0 && role.reviews.length > 0
   // A reviewer's earlier results say when each done-when criterion first passed.
-  const earlier = opened !== undefined && role.touches.length === 0 && role.reviews.length > 0 ? earlierResults(dirname(m.log), role.name) : []
+  const earlier = opened !== undefined && tracksReviews ? earlierResults(dirname(m.log), role.name) : []
 
   return {
     state: roleState({ opened: opened !== undefined, closed: opened?.closed, result, pane, screen }),
@@ -120,14 +128,14 @@ export const statusOf = (r: Runtime, m: Mission) => {
     const { state, work, result, problem, tokens } = liveOf(r, m, role)
 
     return {
-      name: role.name, agent: opened?.agent ?? role.agent, state,
+      name: role.name, duty: role.duty, stage: role.stage, agent: opened?.agent ?? role.agent, state,
       branch: opened?.branch ?? '', pane: opened?.pane ?? '', worktree: opened?.worktree ?? '',
       commits: work?.commits ?? [], changed: work?.changed ?? [], outside: work?.outside ?? [],
       summary: result?.summary ?? '', ...(result?.problem ? { resultProblem: result.problem } : {}), ...(problem ? { problem } : {}), ...(tokens === undefined ? {} : { tokens }),
     }
   })
 
-  return { mission: m.name, stage: m.folded.stage, roles, gates: [...m.folded.gates.values()].filter(gate => gate.answer === undefined), problems: m.problems }
+  return { mission: m.name, workflow: m.plan.workflow, stage: m.folded.stage, roles, gates: [...m.folded.gates.values()].filter(gate => gate.answer === undefined), problems: m.problems }
 }
 
 const approved = (m: Mission): void => {
@@ -185,6 +193,18 @@ export const dispatch = async (r: Runtime, initial: Mission, name: string): Prom
   approved(m)
   const role = m.plan.roles.find(role => role.name === name)
   if (role === undefined) throw new Refusal(`unknown role: ${name}`)
+  if (m.workflow !== undefined && role.stage !== '') {
+    const activeStage = effectiveStageId(m.workflow, m.folded, true)
+    if (activeStage !== role.stage) {
+      throw new Refusal(`role ${name} belongs to stage "${role.stage}", while mission ${m.name} is in stage "${activeStage}"; run troupe stage ${role.stage} first`)
+    }
+    const unapproved = unapprovedGatesBefore(m.workflow, role.stage, m.folded.gates, isApproved(m.folded, m.hash))
+    if (unapproved.length > 0) {
+      throw new Refusal(
+        `cannot dispatch role ${name} in stage ${role.stage}: gate${unapproved.length === 1 ? '' : 's'} ${unapproved.join(', ')} ${unapproved.length === 1 ? 'is' : 'are'} not approved yet`,
+      )
+    }
+  }
   const previous = m.folded.roles.get(name)
   if (previous !== undefined && !previous.closed) {
     const pane = ownedPane(r, previous)
@@ -310,9 +330,12 @@ export const teardown = async (r: Runtime, initial: Mission, force: boolean): Pr
   const baseOf = (branch: string): string | undefined => m.folded.roles.get(branch.slice(prefix.length))?.base
   const trees = entries.filter(entry => entry.branch.startsWith(prefix) || resolve(dirname(entry.path)) === parent)
   const reasons: string[] = []
-  // Teardown deletes the windows a requested change would go to: every gate the workflow declares (the MR's merged
-  // gate among them) is approved first (#48).
-  if (!force) for (const stage of workflowStages(r, m.plan.workflow).stages) {
+  const policy = m.workflow?.teardown ?? { requireMerge: true, requirePush: true }
+  if (!force && ((m.folded.approved !== '' && m.folded.approved !== m.hash) || ((!policy.requireMerge || !policy.requirePush) && !isApproved(m.folded, m.hash)))) {
+    reasons.push('plan or workflow changed since approval; run troupe approve or pass --force')
+  }
+  // Teardown deletes the windows a requested change would go to: every gate the workflow declares is approved first (#48).
+  if (!force) for (const stage of stagesOf(m)) {
     if (stage.gate !== undefined && m.folded.gates.get(stage.gate)?.answer !== 'approve') reasons.push(`gate ${stage.gate}: not approved yet; teardown waits for it`)
   }
   for (const tree of trees) {
@@ -321,14 +344,14 @@ export const teardown = async (r: Runtime, initial: Mission, force: boolean): Pr
   }
   for (const branch of branches) {
     if (branch === target) reasons.push(`${branch}: is the mission branch; cannot remove`)
-    else if (!force) {
+    else if (!force && policy.requireMerge) {
       const merged = mergedInto(r, m.root, branch, target, baseOf(branch))
       if (!merged.merged) reasons.push(`${branch}: unmerged into ${target}${merged.why ? ` (${merged.why})` : ''}`)
     }
   }
   if (missionWorktree !== undefined && !force) {
     if (git(r, missionWorktree, ['status', '--porcelain', '--untracked-files=all']).trim()) reasons.push(`${missionBranch}: dirty or untracked changes in ${missionWorktree}`)
-    if (git(r, m.root, ['branch', '-r', '--contains', `refs/heads/${missionBranch}`]).trim() === '') reasons.push(`${missionBranch}: not pushed; push it before removing ${missionWorktree}`)
+    if (policy.requirePush && git(r, m.root, ['branch', '-r', '--contains', `refs/heads/${missionBranch}`]).trim() === '') reasons.push(`${missionBranch}: not pushed; push it before removing ${missionWorktree}`)
   }
   // Unknown files are never recursively swept up, even with --force.
   if (existsSync(parent)) for (const name of readdirSync(parent)) {
@@ -348,8 +371,10 @@ export const teardown = async (r: Runtime, initial: Mission, force: boolean): Pr
     for (const tree of trees) {
       if (existsSync(tree.path) && git(r, tree.path, ['status', '--porcelain', '--untracked-files=all']).trim()) throw new Refusal(`${tree.branch}: dirty or untracked changes appeared during teardown`)
     }
-    for (const branch of branches) {
-      if (!mergedInto(r, m.root, branch, target, baseOf(branch)).merged) throw new Refusal(`${branch}: unmerged into ${target}; teardown remains incomplete`)
+    if (policy.requireMerge) {
+      for (const branch of branches) {
+        if (!mergedInto(r, m.root, branch, target, baseOf(branch)).merged) throw new Refusal(`${branch}: unmerged into ${target}; teardown remains incomplete`)
+      }
     }
   }
   for (const tree of trees) {

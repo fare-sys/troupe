@@ -1,4 +1,4 @@
-import { clean, mux, Refusal, workflowStages } from './command-context.ts'
+import { clean, mux, Refusal, stagesOf } from './command-context.ts'
 import { mission } from './missions.ts'
 import type { Runtime } from './command-context.ts'
 import { lang, saveLang, setLang, t } from './i18n.ts'
@@ -37,13 +37,12 @@ export const panelEffect = async (r: Runtime, want: string, effect: Effect): Pro
 
       return t('Opened {0}', effect.role)
     }
-    const stages = workflowStages(r, m.plan.workflow)
-    const current = modelOf({ mission: m.name, planPath: m.path, planText: m.source, plan: m.plan, hash: m.hash, folded: m.folded, log: m.events, live: new Map(), stages: stages.stages, now: new Date(r.now()) })
+    const stages = stagesOf(m)
+    const current = modelOf({ mission: m.name, planPath: m.path, planText: m.source, plan: m.plan, hash: m.hash, folded: m.folded, log: m.events, live: new Map(), stages, now: new Date(r.now()) })
     const gate = gateTarget(current)
     if (gate === undefined || gate.id !== effect.gate.id || gate.stamp !== effect.gate.stamp || (gate.isPlan && gate.hash !== effect.gate.hash)) throw new Refusal(t('The gate or plan changed; review it again.'))
     if (effect.answer === 'approve' && gate.isPlan) {
       clean(m)
-      if (stages.problems.length > 0) throw new Refusal(stages.problems.join('\n'))
     }
     if (effect.answer === 'change' && !effect.text?.trim()) throw new Refusal(t('Enter a change first.'))
     const answer = append(m.log, 'panel', { ev: 'gate-answer', gate: gate.id, answer: effect.answer, ...(effect.text === undefined ? {} : { text: effect.text }), ...(gate.isPlan ? { plan: m.hash } : {}) })

@@ -27,19 +27,21 @@ Access-token lifetime; the admin session list.
 because it needs the new error code.
 
 ```yaml
-troupe: 1
+troupe: 2
 goal: "Refresh tokens rotate on every use, and a reused one is refused"
 why: "Stolen refresh tokens stay valid for 30 days today (issue #212)"
-workflow: troupe-mission
+workflow: delivery
 base: main
 profiles:
   claude-build:
+    duty: builder
     agent: claude
     model: opus
     effort: high
     flags: [--permission-mode, acceptEdits]
 roles:
   api:
+    duty: builder
     agent: codex
     model: gpt-6.1-sol
     effort: high
@@ -59,6 +61,7 @@ roles:
     depends_on: [api]
   review:
     use: claude-build
+    duty: reviewer
     model: sonnet
     goal: "Review each branch as it lands"
     touches: []

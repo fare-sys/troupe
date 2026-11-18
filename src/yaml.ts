@@ -160,3 +160,30 @@ export const parseYaml = (source: string, firstLine = 1): Yaml => {
 
   return root
 }
+
+/** Splits Markdown with a leading `---` YAML front matter block into its YAML source and body. */
+export const parseFrontMatter = (source: string): { yaml: string; body: string } | undefined => {
+  const normalized = source.replace(/\r\n/g, '\n')
+  const match = /^---\n([\s\S]*?)\n---(?:\n([\s\S]*))?$/.exec(normalized)
+  if (match === null) return undefined
+
+  return { yaml: match[1] ?? '', body: (match[2] ?? '').trim() }
+}
+
+/** Finds the 1-based line number of a dotted YAML key path (`a.b`) within `source`, offset by `firstLine`. */
+export const yamlLineOf = (source: string, field: string, firstLine = 1): number => {
+  if (field === '') return firstLine
+  const parents: { indent: number; key: string }[] = []
+  const lines = source.split('\n')
+  for (const [index, line] of lines.entries()) {
+    const match = /^(\s*)(?:-\s+)?([^\s#][^:]*):(?:\s|$)/.exec(line)
+    if (match === null) continue
+    const indent = match[1]?.length ?? 0
+    while (parents.length > 0 && (parents.at(-1)?.indent ?? 0) >= indent) parents.pop()
+    parents.push({ indent, key: (match[2] ?? '').trim() })
+    if (parents.map(one => one.key).join('.') === field) return firstLine + index
+  }
+
+  return firstLine
+}
+

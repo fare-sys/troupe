@@ -31,11 +31,13 @@ paste: bracketed
 const plan = (deps = false) => `# Test mission
 
 \`\`\`yaml
+troupe: 2
 goal: Ship the feature
 why: People need it
 base: main
 roles:
   api:
+    duty: builder
     agent: fake
     model: small
     effort: low
@@ -44,6 +46,7 @@ roles:
     text: instructions.md
     skills: [probe-skill]
   web:
+    duty: builder
     agent: fake
     flags: [--policy, ask]
     touches: [web/]
@@ -78,7 +81,7 @@ const world = (t, env = { TROUPE_TMUX_SOCKET: 'unit-socket' }) => {
   mkdirSync(join(root, '.git'), { recursive: true })
   mkdirSync(home)
   write(join(pkg, 'skills/troupe-mission/SKILL.md'), 'Workflow instructions.')
-  write(join(pkg, 'skills/troupe-mission/templates/plan.md'), plan().replace('base: main', 'base: mission/<mission>   # cut roles from it'))
+  write(join(pkg, 'templates/plan.md'), plan().replace('base: main', 'base: mission/<mission>   # cut roles from it'))
   // The checkout is on m1's mission branch, so commands resolve m1 without -m.
   const head = { branch: 'mission/m1' }
   const calls = []
@@ -227,15 +230,18 @@ test('briefOf tailors instructions for read-only reviewers, numbered done-when c
 - UI renders list
 
 \`\`\`yaml
+troupe: 2
 goal: Ship the feature
 why: People need it
 base: main
 roles:
   api:
+    duty: builder
     agent: fake
     flags: [--policy, ask]
     touches: [src/]
   review:
+    duty: reviewer
     agent: fake
     flags: [--policy, ask]
     touches: []
@@ -253,6 +259,8 @@ Check contracts.
   )
   await w.approve()
   assert.equal((await w.call('dispatch', 'api')).code, 0)
+  assert.match((await w.call('dispatch', 'review')).out, /role review belongs to stage "review", while mission m1 is in stage "build"/)
+  assert.equal((await w.call('stage', 'review')).code, 0)
   assert.equal((await w.call('dispatch', 'review')).code, 0)
 
   const apiBrief = readFileSync(join(w.root, '.git/troupe/m1/brief-api.md'), 'utf8')
@@ -332,10 +340,26 @@ test('status, wait and close read live state, retain worktrees, and skip panes w
 
 test('stage validation, gate reopen/answer, timeout and usage errors', async t => {
   const w = world(t)
+  assert.equal((await w.call('stage', 'build')).code, 1)
+  assert.equal((await w.approve()).code, 0)
   assert.equal((await w.call('stage', 'build')).code, 0)
   assert.equal((await w.call('stage', 'not-a-stage')).code, 1)
-  const custom = 'stages:\n  - id: start\n    gate: plan\n  - id: special\n'
-  w.write(join(w.home, '.agents/skills/troupe-mission/stages.yaml'), custom)
+  const custom = `---
+name: delivery
+summary: Custom delivery stages
+stages:
+  - id: start
+    label: Start
+    gate: plan
+  - id: special
+    label: Special
+    duties: [builder]
+    required: true
+---
+Custom playbook.
+`
+  w.write(join(w.home, '.config/troupe/workflows/delivery.md'), custom)
+  assert.equal((await w.approve()).code, 0)
   assert.equal((await w.call('stage', 'special')).code, 0)
   assert.equal((await w.call('stage', 'build')).code, 1)
   await w.call('gate', 'plan', '--no-wait')
@@ -367,9 +391,16 @@ test('setup updates marked copies and removes only its own skill directories', a
   const copilot = join(w.home, '.copilot/skills/troupe-mission')
   assert.ok(existsSync(join(claude, INSTALL_MARKER)))
   assert.ok(existsSync(join(copilot, INSTALL_MARKER)))
+  // Seed legacy pre-v2 embedded skill assets and confirm `setup` removes them cleanly.
+  w.write(join(codex, 'stages.yaml'), 'legacy: true\n')
+  w.write(join(codex, 'roles/builder.md'), 'legacy builder\n')
+  w.write(join(codex, 'templates/plan.md'), 'legacy plan\n')
   w.write(join(w.pkg, 'skills/troupe-mission/SKILL.md'), 'Updated workflow')
   assert.equal((await w.call('setup')).code, 0)
   assert.equal(readFileSync(join(codex, 'SKILL.md'), 'utf8'), 'Updated workflow')
+  assert.ok(!existsSync(join(codex, 'stages.yaml')))
+  assert.ok(!existsSync(join(codex, 'roles')))
+  assert.ok(!existsSync(join(codex, 'templates')))
   rmSync(join(claude, INSTALL_MARKER))
   assert.equal((await w.call('setup', '--remove')).code, 1)
   assert.ok(existsSync(claude))
@@ -460,18 +491,17 @@ test('shellOf preserves every argv element without command substitution', () => 
   assert.deepEqual(JSON.parse(execFileSync('/bin/sh', ['-c', script], { encoding: 'utf8' })), words)
 })
 
-test('workflow text resolves the package and installed skills, and changes the approval hash', async t => {
+test('duty and workflow definitions resolve 3-tier overrides and change the approval hash', async t => {
   const w = world(t)
-  w.write(join(w.root, 'docs/missions/m1/plan.md'), plan().replace('text: instructions.md', 'text: workflow:builder'))
-  w.write(join(w.pkg, 'skills/troupe-mission/roles/builder.md'), 'Package builder rules')
+  const makeBuilder = body => `---\nname: builder\nsummary: Custom builder\ntouches: required\nstartup: immediate\nreviews: forbidden\n---\n${body}\n`
+  w.write(join(w.home, '.config/troupe/roles/builder.md'), makeBuilder('User builder rules'))
   assert.equal((await w.approve()).code, 0)
-  w.write(join(w.pkg, 'skills/troupe-mission/roles/builder.md'), 'Changed package rules')
+  w.write(join(w.home, '.config/troupe/roles/builder.md'), makeBuilder('Changed user builder rules'))
   assert.match((await w.call('dispatch', 'api')).out, /not approved/)
-  w.write(join(w.home, '.agents/skills/troupe-mission/SKILL.md'), 'Installed workflow')
-  w.write(join(w.home, '.agents/skills/troupe-mission/roles/builder.md'), 'Installed builder rules')
+  w.write(join(w.root, '.troupe/roles/builder.md'), makeBuilder('Repo builder rules'))
   await w.approve()
   assert.equal((await w.call('dispatch', 'api')).code, 0)
-  assert.ok(readFileSync(join(w.root, '.git/troupe/m1/brief-api.md'), 'utf8').includes('Installed builder rules'))
+  assert.ok(readFileSync(join(w.root, '.git/troupe/m1/brief-api.md'), 'utf8').includes('Repo builder rules'))
 })
 
 test('a changed plan during worktree preparation never launches a role', async t => {
@@ -507,7 +537,7 @@ test('status watch cancels, wait reports an exited pane, and up can start before
   const stop = new AbortController()
   const watched = await execute('status', ['--watch'], { ...w.r, signal: stop.signal, sleep: async () => stop.abort() })
   assert.equal(watched.code, 0)
-  assert.ok(w.output.some(text => text.includes('api: planned')))
+  assert.ok(w.output.some(text => text.includes('api [builder@build]: planned')))
   await w.approve()
   await w.call('dispatch', 'api')
   const pane = [...w.panes.values()][0]

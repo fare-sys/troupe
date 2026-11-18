@@ -2,29 +2,30 @@
 
 [← Back to the overview](../README.md) · [简体中文](guide.zh-CN.md)
 
-[Plans](#the-plan) · [Commands](#commands) · [Panel](#the-panel) · [Agents](#agents) · [Known limits](#known-limits)
+[Plans](#the-plan) · [Workflows & duties](#workflows-and-duty-roles) · [Commands](#commands) · [Panel](#the-panel) · [Agents](#agents) · [Known limits](#known-limits)
 
 ## The plan
 
-Markdown around one fenced yaml block; each role's task is a
-`## Role: <name>` section in the Markdown. The template is
-[`skills/troupe-mission/templates/plan.md`](../skills/troupe-mission/templates/plan.md).
+Markdown around one fenced yaml block; each task role's assignment is a
+`## Role: <name>` section in the Markdown. The default template is
+[`templates/plan.md`](../templates/plan.md).
 
 ```yaml
-troupe: 1
+troupe: 2
 goal: "Refresh tokens rotate on every use, and a reused one is refused"
 why: "Stolen refresh tokens stay valid for 30 days today (issue #212)"
-workflow: troupe-mission
+workflow: delivery
 base: mission/auth-refresh
 profiles:
   claude-build:
+    duty: builder
     agent: claude
     model: opus
     effort: high
     flags: [--permission-mode, acceptEdits]
-    text: workflow:builder
-roles:                                # one role = one window, worktree and branch
+roles:                                # one task role = one window, worktree and branch
   api:
+    duty: builder
     agent: codex
     model: gpt-6.1-sol
     effort: high
@@ -39,17 +40,45 @@ roles:                                # one role = one window, worktree and bran
     depends_on: [api]                 # opens once api's result says done
   review:
     use: claude-build
+    duty: reviewer
     goal: "Review each branch as it lands"
     touches: []                       # changes no files
     reviews: [api, web]
-    text: workflow:reviewer
 ```
 
-`troupe check` refuses: an unknown agent; `flags` that do not pin the
-agent's permission (Claude Code: `--permission-mode`; Codex: `-a` and `-s`);
-a role with no text or no `touches`; an unknown `depends_on`, `reviews` or
-profile; a dependency cycle; two roles whose `touches` overlap without a
-`depends_on` between them. `model` and `effort` are passed as written.
+`troupe check` refuses: an unknown `workflow` or `duty`; missing task roles
+for a workflow stage marked `required`; a `duty` not permitted in the role's
+`stage` (inferred when unambiguous, required when a duty appears in multiple
+stages); violations of a duty's `touches` (`required | optional | none`) or
+`reviews` (`required | optional | forbidden`) contract; cross-stage
+`depends_on` pointing forward in the workflow; an unknown agent; `flags` that
+do not pin the agent's permission (Claude Code: `--permission-mode`; Codex:
+`-a` and `-s`); a role with no `## Role: <name>` text; an unknown
+`depends_on`, `reviews`, `text` path or profile; a dependency cycle; or two
+roles whose `touches` overlap without a `depends_on` between them. `model` and
+`effort` are passed as written.
+
+## Workflows and duty roles
+
+One workflow-agnostic orchestrator skill (`skills/troupe-mission/SKILL.md`)
+drives any workflow by reference (`workflow: <name>` in `plan.md`, or
+`-w, --workflow <name>` on `mission new` / `up`).
+
+- **Built-in workflows** ([`workflows/`](../workflows/)):
+  - `delivery` (default): `plan -> [plan] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
+  - `design-first`: `plan -> [plan] -> design(architect,researcher) -> [design-ok] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
+  - `investigation`: `plan -> [plan] -> explore(researcher,architect) -> synthesize(reviewer) -> [report-ok] -> teardown` (read-only; teardown requires neither merge nor push)
+  - `direct`: `plan -> [plan] -> build(builder) -> verify(tester,reviewer) -> integrate -> [accept-ok] -> teardown` (local branch integration without remote push/MR)
+- **Built-in duty roles** ([`roles/`](../roles/)): `builder`, `reviewer`,
+  `architect`, `researcher`, and `tester`. Each defines YAML front matter
+  (`name`, `summary`, `touches`, `startup`, `reviews`) and Markdown rules
+  injected into every assigned task role's launch brief.
+- **3-tier customization**: add or override workflows under
+  `<repo>/.troupe/workflows/<name>.md` or `~/.config/troupe/workflows/<name>.md`,
+  and duty roles under `<repo>/.troupe/roles/<duty>.md` or
+  `~/.config/troupe/roles/<duty>.md` (`repo > user > built-in`). Edits to the
+  active workflow or referenced duty files change the plan hash and require
+  re-approval before further dispatches.
 
 ## Commands
 
@@ -63,16 +92,18 @@ on usage errors.
 
 | Command | What it does |
 |---|---|
-| `setup [--remove]` | install the workflow skill for each harness found |
-| `mission new <name> [--base <ref>]` | create the mission's worktree on `mission/<name>` with the plan template, bind this pane to it and open its panel |
+| `setup [--remove]` | install the orchestrator skill for each harness found |
+| `workflow [list \| show <name>] [--json]` | list available workflows (`repo > user > built-in`) or inspect one workflow's stages, gates, teardown policy and playbook |
+| `role [list \| show <duty>] [--json]` | list available duty roles (`repo > user > built-in`) or inspect one duty role's contract and rules |
+| `mission new <name> [-w <workflow>] [--base <ref>]` | create the mission's worktree on `mission/<name>` with a starter `plan.md` for `<workflow>`, bind this pane to it and open its panel |
 | `open [--planning]` | show this pane's mission's panel beside it (one per mission); without a mission it refuses and lists the open ones, except with `--planning`, which shows a panel waiting for `mission new`; `open -m <name>` from an unbound pane makes it that mission's orchestrator, only once the previous orchestrator pane is gone or dead |
-| `up -m <name> [--orch claude\|codex\|copilot\|jishubuddy]` | `mission new`, then open the orchestrator in the mission worktree and the panel |
+| `up -m <name> [-w <workflow>] [--orch claude\|codex\|copilot\|jishubuddy]` | `mission new`, then open the orchestrator in the mission worktree and the panel |
 | `panel` | the live panel (`up` runs it; `--once --plain` prints one frame) |
-| `check` | check the plan and the user adapters |
+| `check` | check `plan.md`, workflow/duty contracts, and adapters |
 | `approve` | approve the plan, from a terminal only |
 | `gate <id> ["question"] [--no-wait]` | ask the person in the panel; prints `approve` or `change: <text>` |
-| `stage <id>` | move the panel's stage strip (ids from the workflow's `stages.yaml`) |
-| `dispatch <role>` | open a role: worktree, branch, brief, pane |
+| `stage <id>` | move the panel's stage strip (ids from the mission's workflow; refuses if any preceding workflow gate is unapproved) |
+| `dispatch <role>` | open a task role in the active workflow stage: worktree, branch, brief, pane |
 | `status [--json] [--watch]` | each role's state, commits, changes outside `touches`, result; with no mission resolved, the open missions with their worktree, orchestrator pane and panel pane |
 | `send <role> <text…>` | type into a role's window, only when it is ready |
 | `wait --role <r> [--ready] \| --gate <id> [--timeout s]` | wait for a result, readiness or an answer |
@@ -83,13 +114,14 @@ An open mission has a worktree on its `mission/<name>` branch or a log, and
 no teardown event. Explicit `-m` opens any mission, including a finished
 one. Until its orchestrator is bound, the panel waits for one.
 
-Once the MR is merged and its `merged` gate approved, run `troupe teardown -m
-<mission>`. It closes role panes and the mission's panel, and unbinds the
-orchestrator's pane, which stays open. It refuses while any gate the
-workflow declares is not approved, and refuses dirty or untracked work,
-commits unmerged into the plan's `base` mission branch, and an unpushed
-mission branch, unless `--force`. Panes with a different owner marker are skipped. Repeating it
-with explicit `-m` reports nothing left. The MR head and log stay available.
+Once all gates declared by the mission's workflow are approved, run `troupe
+teardown -m <mission>`. It closes role panes and the mission's panel, and
+unbinds the orchestrator's pane, which stays open. It refuses while any gate
+the workflow declares is not approved, and refuses dirty or untracked work,
+plus unmerged role commits (`teardown.require_merge`, default `true`) and an
+unpushed mission branch (`teardown.require_push`, default `true`) when enabled
+by the workflow, unless `--force`. Panes with a different owner marker are skipped. Repeating it
+with explicit `-m` reports nothing left. The mission branch and log stay available.
 
 Use `troupe wait --role <r> --ready --timeout 60` after dispatch or before
 sending new work. It succeeds on ready, stops with the dialog on waits, and
@@ -185,12 +217,14 @@ Both names are available in plans, including builder and reviewer roles:
 ```yaml
 roles:
   build:
+    duty: builder
     agent: copilot
     model: auto
     effort: high
     flags: [--allow-tool=write]
     touches: [src/]
   review:
+    duty: reviewer
     agent: jishubuddy
     # Optional: use an ID available in your JishuBuddy model catalog.
     # model: provider/model-id
@@ -289,7 +323,8 @@ are unchanged.
 From a clone: `npm ci && npm run build && npm link` puts your build of
 `troupe` on the `PATH`. `./check.sh` (or `npm test`) builds and runs the tests under plain Node; CI
 runs them on macOS and Linux with Node 20 and 22. `src/` holds everything:
-the plan (`plan.ts`, `yaml.ts`, `touches.ts`), the adapters (`agents.ts`),
+the plan, duties and workflows (`plan.ts`, `duties.ts`, `workflows.ts`,
+`stages.ts`, `yaml.ts`, `touches.ts`), the adapters (`agents.ts`),
 the log and the live reads (`log.ts`, `state.ts`), the commands
 (`commands.ts`, `role-commands.ts`, `command-context.ts`, `missions.ts`,
 `panes.ts`, `setup.ts`), and the panel (`model.ts`, `draw.ts`, `canvas.ts`, `panel*.ts`).

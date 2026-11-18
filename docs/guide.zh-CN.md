@@ -2,28 +2,29 @@
 
 [← 返回项目首页](../README.zh-CN.md) · [English](guide.md)
 
-[计划](#计划) · [命令](#命令) · [面板](#面板) · [Agent](#agents) · [已知限制](#已知限制)
+[计划](#计划) · [Workflow 与职责角色](#workflow-与职责角色) · [命令](#命令) · [面板](#面板) · [Agent](#agents) · [已知限制](#已知限制)
 
 ## 计划
 
-Markdown 包着一个 yaml 代码块；每个角色的任务是 Markdown 里的一个
-`## Role: <name>` 小节。模板在 [`skills/troupe-mission/templates/plan.md`](../skills/troupe-mission/templates/plan.md)。
+Markdown 包着一个 yaml 代码块；每个任务角色的说明是 Markdown 里的一个
+`## Role: <name>` 小节。默认模板在 [`templates/plan.md`](../templates/plan.md)。
 
 ```yaml
-troupe: 1
+troupe: 2
 goal: "Refresh tokens rotate on every use, and a reused one is refused"
 why: "Stolen refresh tokens stay valid for 30 days today (issue #212)"
-workflow: troupe-mission
+workflow: delivery
 base: mission/auth-refresh
 profiles:
   claude-build:
+    duty: builder
     agent: claude
     model: opus
     effort: high
     flags: [--permission-mode, acceptEdits]
-    text: workflow:builder
-roles:                                # 一个角色 = 一个窗口、一个 worktree、一个分支
+roles:                                # 一个任务角色 = 一个窗口、一个 worktree、一个分支
   api:
+    duty: builder
     agent: codex
     model: gpt-6.1-sol
     effort: high
@@ -38,16 +39,42 @@ roles:                                # 一个角色 = 一个窗口、一个 wor
     depends_on: [api]                 # api 的结果写明 done 后才打开
   review:
     use: claude-build
+    duty: reviewer
     goal: "Review each branch as it lands"
     touches: []                       # 不改任何文件
     reviews: [api, web]
-    text: workflow:reviewer
 ```
 
-`troupe check` 会拒绝：未知的 agent；`flags` 没有写定 agent 的权限
-（Claude Code：`--permission-mode`；Codex：`-a` 和 `-s`）；角色没有任务文本或没有
-`touches`；未知的 `depends_on`、`reviews` 或 profile；依赖成环；两个角色的
-`touches` 重叠却没有 `depends_on` 排先后。`model` 和 `effort` 原样传递。
+`troupe check` 会拒绝：未知的 `workflow` 或 `duty`；工作流标记为 `required`
+的阶段缺少任务角色；角色的 `duty` 不被其所在 `stage` 允许（无歧义时自动推导，
+同一 `duty` 出现在多个阶段时必须显式填写 `stage`）；违反职责角色关于 `touches`
+（`required | optional | none`）或 `reviews`（`required | optional | forbidden`）
+的契约；跨阶段的 `depends_on` 违背阶段先后顺序；未知的 agent；`flags` 没有写定
+agent 的权限（Claude Code：`--permission-mode`；Codex：`-a` 和 `-s`）；角色没有
+`## Role: <name>` 任务文本；未知的 `depends_on`、`reviews`、`text` 路径或
+profile；依赖成环；两个角色的 `touches` 重叠却没有 `depends_on` 排先后。`model`
+和 `effort` 原样传递。
+
+<a id="workflow-与职责角色"></a>
+## Workflow 与职责角色
+
+单一、与具体流程解耦的编排者 skill（`skills/troupe-mission/SKILL.md`）按引用执行任意
+workflow（在 `plan.md` 中声明 `workflow: <name>`，或在 `mission new` / `up` 时传
+`-w, --workflow <name>`）。
+
+- **内置 workflow**（[`workflows/`](../workflows/)）：
+  - `delivery`（默认）：`plan -> [plan] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
+  - `design-first`：`plan -> [plan] -> design(architect,researcher) -> [design-ok] -> build(builder,tester) -> review(reviewer) -> [mr-ok] -> mr -> [merged] -> teardown`
+  - `investigation`：`plan -> [plan] -> explore(researcher,architect) -> synthesize(reviewer) -> [report-ok] -> teardown`（只读调研，teardown 不要求合并与推送）
+  - `direct`：`plan -> [plan] -> build(builder) -> verify(tester,reviewer) -> integrate -> [accept-ok] -> teardown`（本地分支交付，不要求远程推送／开 PR）
+- **内置职责角色**（[`roles/`](../roles/)）：`builder`、`reviewer`、`architect`、
+  `researcher`、`tester`。每个职责角色由 YAML front matter（`name`、`summary`、
+  `touches`、`startup`、`reviews`）与 Markdown 守则组成，并在启动简报中自动注入给对应任务角色。
+- **三层覆盖与扩展**：可在 `<repo>/.troupe/workflows/<name>.md` 或
+  `~/.config/troupe/workflows/<name>.md` 新增／覆盖 workflow，在
+  `<repo>/.troupe/roles/<duty>.md` 或 `~/.config/troupe/roles/<duty>.md` 新增／覆盖职责角色
+  （优先级 `repo > user > built-in`）。修改被当前计划引用的 workflow 或职责角色文件会改变计划哈希，
+  继续派发前需要重新批准。
 
 ## 命令
 
@@ -59,16 +86,18 @@ mission 的 worktree 读计划，但不允许指定与当前 pane 所属不同�
 
 | 命令 | 作用 |
 |---|---|
-| `setup [--remove]` | 为找到的每个 harness 安装工作流 skill |
-| `mission new <name> [--base <ref>]` | 在 `mission/<name>` 上创建 mission 的 worktree 和计划模板，把当前 pane 绑定上去并打开它的面板 |
+| `setup [--remove]` | 为找到的每个 harness 安装编排者 skill |
+| `workflow [list \| show <name>] [--json]` | 列出可用 workflow（`repo > user > built-in`）或查看单个 workflow 的阶段、关卡、收尾策略与编排说明 |
+| `role [list \| show <duty>] [--json]` | 列出可用职责角色（`repo > user > built-in`）或查看单个职责角色的契约与工作守则 |
+| `mission new <name> [-w <workflow>] [--base <ref>]` | 在 `mission/<name>` 上创建 mission 的 worktree 和针对 `<workflow>` 的初始计划，把当前 pane 绑定上去并打开面板 |
 | `open [--planning]` | 在当前 pane 旁边显示它的 mission 面板（每个 mission 一个）；没有 mission 时拒绝并列出打开的 mission，带 `--planning` 时则显示一个等待 `mission new` 的面板；在未绑定的 pane 里 `open -m <name>` 会让它成为该 mission 的编排者，前提是之前的编排者 pane 已经不在或已失效 |
-| `up -m <name> [--orch claude\|codex]` | 先 `mission new`，再在 mission worktree 中打开编排者和面板 |
+| `up -m <name> [-w <workflow>] [--orch claude\|codex\|copilot\|jishubuddy]` | 先 `mission new`，再在 mission worktree 中打开编排者和面板 |
 | `panel` | 实时面板（`up` 会运行它；`--once --plain` 打印一帧） |
-| `check` | 检查计划和用户适配器 |
+| `check` | 检查 `plan.md`、workflow／职责角色契约与适配器 |
 | `approve` | 批准计划，只能在终端里执行 |
 | `gate <id> ["question"] [--no-wait]` | 在面板里问人；输出 `approve` 或 `change: <text>` |
-| `stage <id>` | 移动面板的阶段条（id 来自工作流的 `stages.yaml`） |
-| `dispatch <role>` | 打开一个角色：worktree、分支、任务简报、pane |
+| `stage <id>` | 移动面板的阶段条（id 来自当前 mission 的 workflow；若前置关卡未批准则拒绝） |
+| `dispatch <role>` | 打开处于当前激活 workflow 阶段的任务角色：worktree、分支、任务简报、pane |
 | `status [--json] [--watch]` | 每个角色的状态、提交、`touches` 之外的改动、结果；没有解析到 mission 时，列出打开的 mission 及其 worktree、编排者 pane 和面板 pane |
 | `send <role> <text…>` | 往角色窗口里打字，只在它就绪时 |
 | `wait --role <r> [--ready] \| --gate <id> [--timeout s]` | 等待结果、就绪或回答 |
@@ -79,12 +108,13 @@ mission 的 worktree 读计划，但不允许指定与当前 pane 所属不同�
 teardown 事件。显式 `-m` 可以打开任何 mission，包括已结束的。编排者绑定之前，
 面板会一直等它。
 
-MR 合并、`merged` 关卡批准之后，运行 `troupe teardown -m <mission>`。它关闭
+当当前 workflow 声明的所有关卡都批准后，运行 `troupe teardown -m <mission>`。它关闭
 角色 pane 和 mission 面板，并解绑编排者的 pane（pane 本身保持打开）。只要工作流
-声明的任一关卡未批准，它就拒绝；有未提交或未跟踪的改动、有未合并进计划 `base`
-mission 分支的提交、或 mission 分支未推送，它也拒绝，除非带 `--force`。
+声明的任一关卡未批准，它就拒绝；有未提交或未跟踪的改动，以及在 workflow 开启
+`teardown.require_merge`（默认 `true`）或 `teardown.require_push`（默认 `true`）时
+存在未合并进 `base` mission 分支的提交或 mission 分支未推送，它也会拒绝，除非带 `--force`。
 owner 标记不同的 pane 会被跳过。显式 `-m` 再跑一次会报告没有可清理的东西。
-MR 的 head 和日志都还在。
+mission 分支和日志都保留。
 
 dispatch 之后、或发送新任务之前，用 `troupe wait --role <r> --ready --timeout 60`。
 就绪即成功；遇到等待你的对话框会停下并显示它；pane 消失或超时则失败。
@@ -179,7 +209,7 @@ reflog。这样它能提交，又不必授权整个公共 Git 目录或主分支
 
 从克隆的仓库：`npm ci && npm run build && npm link` 把你构建的 `troupe` 放到
 `PATH` 上。`./check.sh`（或 `npm test`）构建并在纯 Node 下运行测试；CI 在 macOS 和
-Linux 上用 Node 20 和 22 运行。所有代码都在 `src/`：计划（`plan.ts`、`yaml.ts`、
-`touches.ts`）、适配器（`agents.ts`）、日志和实时读取（`log.ts`、`state.ts`）、
+Linux 上用 Node 20 和 22 运行。所有代码都在 `src/`：计划、职责角色与 workflow
+（`plan.ts`、`duties.ts`、`workflows.ts`、`stages.ts`、`yaml.ts`、`touches.ts`）、适配器（`agents.ts`）、日志和实时读取（`log.ts`、`state.ts`）、
 命令（`commands.ts`、`role-commands.ts`、`command-context.ts`、`missions.ts`、
 `panes.ts`、`setup.ts`），以及面板（`model.ts`、`draw.ts`、`canvas.ts`、`panel*.ts`）。

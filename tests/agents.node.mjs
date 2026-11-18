@@ -181,7 +181,7 @@ test('custom adapters can select new lifecycle reporters and flag-based prompts'
 test('troupe check uses loaded adapters and prints broken-file diagnostics', t => {
   const { root, home, write, user, repo } = temporary(t)
   write(user('custom'), adapter('custom'))
-  const source = '# mission\n\n```yaml\nroles:\n  a:\n    agent: custom\n    flags: [--policy, ask]\n    touches: []\n```\n\n## Role: a\n\nReply OK.\n'
+  const source = '# mission\n\n```yaml\nroles:\n  a:\n    duty: tester\n    agent: custom\n    flags: [--policy, ask]\n    touches: []\n```\n\n## Role: a\n\nReply OK.\n'
   write(join(root, 'plan.md'), source)
   assert.equal(check(root, 'plan.md', home).code, 0)
   write(repo('custom'), adapter('repo-custom').replace('--policy', '--approval'))

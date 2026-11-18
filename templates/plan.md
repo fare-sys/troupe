@@ -29,25 +29,25 @@ role. Two roles whose `touches` overlap are ordered by `depends_on`;
 everything else runs at once.>
 
 ```yaml
-troupe: 1
+troupe: 2
 goal: "<the mission in one sentence: what it delivers>"
 why: "<one line: why now>"
-workflow: troupe-mission
+workflow: delivery
 base: mission/<mission>         # roles are cut from it at dispatch; you merge onto it
 profiles:                       # settings several roles share; a role's own fields win
   claude-build:
+    duty: builder               # duty role (roles/<duty>.md); stage resolves from workflow
     agent: claude
     model: opus
     effort: high
     flags: [--permission-mode, acceptEdits]
-    text: workflow:builder      # the workflow's builder rules, then the role's section
   codex-build:
+    duty: builder
     agent: codex
     model: <model>
     effort: high
     flags: [-a, on-request, -s, workspace-write]
-    text: workflow:builder
-roles:                          # one role = one window, one worktree, one branch
+roles:                          # one task role = one window, one worktree, one branch
   api:
     use: codex-build
     goal: "<one line: what this role delivers>"
@@ -59,6 +59,7 @@ roles:                          # one role = one window, one worktree, one branc
     touches: [web/src/]
     depends_on: [api]           # opens once api's result says done
   review:
+    duty: reviewer
     agent: claude
     model: sonnet
     effort: high
@@ -66,16 +67,18 @@ roles:                          # one role = one window, one worktree, one branc
     goal: "Review each branch as it lands"
     touches: []                 # changes no files
     reviews: [api, web]
-    text: workflow:reviewer
 ```
 
-Each role resolves its `agent` (`claude`, `codex`, `copilot`, `jishubuddy`, or
-an adapter in `.troupe/agents/`) and `flags` (directly or via `use:` from
-`profiles`). `flags` must explicitly pin the agent's permission rather than
-relying on CLI defaults (Claude Code: `--permission-mode`; Codex: `-a` and
-`-s`; Copilot: `--allow-tool`; JishuBuddy: `--approval`). Keep each value on
-one line. If a role needs a file outside its `touches`, update and re-approve
-this plan before the next dispatch.
+Each task role resolves its `duty` (`builder`, `reviewer`, `architect`,
+`researcher`, `tester`, or a custom duty in `.troupe/roles/`), optional
+`stage` (auto-inferred when the duty appears in only one stage of `workflow`),
+`agent` (`claude`, `codex`, `copilot`, `jishubuddy`, or an adapter in
+`.troupe/agents/`), and `flags` (directly or via `use:` from `profiles`).
+`flags` must explicitly pin the agent's permission rather than relying on CLI
+defaults (Claude Code: `--permission-mode`; Codex: `-a` and `-s`; Copilot:
+`--allow-tool`; JishuBuddy: `--approval`). Keep each value on one line. If a
+role needs a file outside its `touches`, update and re-approve this plan
+before the next dispatch.
 
 ## Role: api
 

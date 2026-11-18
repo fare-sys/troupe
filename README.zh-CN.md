@@ -104,7 +104,13 @@ troupe setup
 
 ## 按你的方式来
 
-何时审查、何时合并、哪些事情要问你，都写在一个 [skill](skills/troupe-mission/SKILL.md) 里。你可以修改或替换它，换成自己的工作方式。CLI 检查计划批准、角色依赖、声明的文件重叠和 agent 权限。
+编排者、职责角色、任务角色与 workflow 完全解耦：
+
+- **单一编排者**（[`skills/troupe-mission/SKILL.md`](skills/troupe-mission/SKILL.md)）不内嵌固定流程，按引用读取并执行当前 mission 指定的 workflow（`troupe up -m <mission> -w <workflow>` 或 `plan.md` 中的 `workflow: <name>`）。
+- **Workflow**（[`workflows/`](workflows/)）定义阶段顺序、各阶段允许的职责角色、人工审批关卡与收尾策略（内置 `delivery`、`design-first`、`investigation`、`direct`）。用 `troupe workflow list` / `troupe workflow show <name>` 查看，也可在 `.troupe/workflows/<name>.md` 或 `~/.config/troupe/workflows/<name>.md` 新增或覆盖。
+- **职责角色**（[`roles/`](roles/)）定义可复用的职责契约（`builder`、`reviewer`、`architect`、`researcher`、`tester`），而 `plan.md` 中的**任务角色**将具体的窗口／worktree 绑定到某个 `duty` 和 workflow `stage`。用 `troupe role list` / `troupe role show <duty>` 查看，或在 `.troupe/roles/<duty>.md` 与 `~/.config/troupe/roles/<duty>.md` 自定义。
+
+CLI 在代码层校验计划批准（对 `plan.md`、所引用的 workflow 与职责角色一并计算哈希）、阶段关卡推进、当前激活阶段的派发边界、角色依赖、文件重叠与 agent 权限。
 
 可以在同一个仓库或不同仓库里同时跑多个 mission。每个 mission 都有自己的分支和 worktree，你原来的 checkout 始终停在原分支上。
 
