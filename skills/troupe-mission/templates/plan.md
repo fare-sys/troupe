@@ -69,23 +69,26 @@ roles:                          # one role = one window, one worktree, one branc
     text: workflow:reviewer
 ```
 
-Each role names its `agent` (`claude`, `codex`, or an adapter in
-`.troupe/agents/`) and its own `flags`, which must pin the agent's permission
-(Claude Code: `--permission-mode`; Codex: `-a` and `-s`): a role never
-inherits it. `model` and `effort` are passed as written. Keep each value on
-one line. If a role turns out to need a file it did not declare, update this
-plan; a changed plan is approved again before the next dispatch.
+Each role resolves its `agent` (`claude`, `codex`, `copilot`, `jishubuddy`, or
+an adapter in `.troupe/agents/`) and `flags` (directly or via `use:` from
+`profiles`). `flags` must explicitly pin the agent's permission rather than
+relying on CLI defaults (Claude Code: `--permission-mode`; Codex: `-a` and
+`-s`; Copilot: `--allow-tool`; JishuBuddy: `--approval`). Keep each value on
+one line. If a role needs a file outside its `touches`, update and re-approve
+this plan before the next dispatch.
 
 ## Role: api
 
-<What the role does, what it must not change, and how it proves its work: a
-command, or an app path to drive.>
+- **Deliver**: <what this role builds or changes>
+- **Do not change**: <adjacent modules, contracts, or behavior to leave untouched>
+- **Verify**: <exact check commands or runtime path to exercise>
 
 ## Role: web
 
-<...>
+- **Deliver**: <what this role builds or changes>
+- **Do not change**: <adjacent modules, contracts, or behavior to leave untouched>
+- **Verify**: <exact check commands or runtime path to exercise>
 
 ## Role: review
 
-<Review each branch as it lands, in the order they land. What to check beyond
-the reviewer rules.>
+- **Focus**: <mission-specific invariants, integration boundaries, or risks to verify beyond standard reviewer rules>
